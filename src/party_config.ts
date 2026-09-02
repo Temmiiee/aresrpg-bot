@@ -9,9 +9,24 @@ export const CHARACTERS = [
     classe: 'senshi',
     leader: true,
   },
-  { name: 'norman', id: '0xce9fa15af7de9c003ed6601d296022262923dffc053991fa7bf4ce7acb472643', classe: 'yajin' },
-  { name: 'sasha', id: '0x5ba547ea6b943fb06bc399bbe3360ee01ec2dbe7ecf48bea023306a70d022964', classe: 'tomoda' },
-  { name: 'perefouras', id: '0x462a4f877cd4a29521fbfb0f9d5a1f72d17e70853951794dcaf8a3f40dfb895f', classe: 'mori' },
+  {
+    name: 'norman',
+    id: '0xce9fa15af7de9c003ed6601d296022262923dffc053991fa7bf4ce7acb472643',
+    classe: 'yajin',
+    leader: false,
+  },
+  {
+    name: 'sasha',
+    id: '0x5ba547ea6b943fb06bc399bbe3360ee01ec2dbe7ecf48bea023306a70d022964',
+    classe: 'tomoda',
+    leader: false,
+  },
+  {
+    name: 'perefouras',
+    id: '0x462a4f877cd4a29521fbfb0f9d5a1f72d17e70853951794dcaf8a3f40dfb895f',
+    classe: 'mori',
+    leader: false,
+  },
 ] as const
 export const LEADER = CHARACTERS.find((c) => c.leader)!
 

@@ -223,6 +223,21 @@ are pinned to an exact game version specifically so the bot never silently drift
 game (the whole reason it lives inside this checkout at all). Re-run the script after every
 `git pull` here rather than hand-editing a standalone copy.
 
+## CI
+
+`.github/workflows/verify.yml` assembles the exact same tree `bun run build-standalone` builds
+locally — this repo plus a fresh clone of the game's private `@aresrpg/sdk`, `@aresrpg/fight`,
+`@aresrpg/immutable`, `@aresrpg/protocol` — and typechecks it. Runs on every push/PR, **and on a
+weekly schedule independent of any push here**, so a game update that moves one of those
+packages out from under the bot gets caught even when nobody touched this repo that week — the
+one signal the scheduled game-changelog review can't give, since that routine has no access to
+this source to compare against.
+
+Known, currently-unavoidable baseline (not a regression, present from this repo's first commit):
+5 type errors rooted in the shared `@aresrpg/sdk` package's own type declarations (a narrower
+`include` type on `getObjects` than the gRPC transport actually accepts, and a `Receipt` type
+missing `commandResults`) — fixing them means editing that shared package, not this bot.
+
 ## Known gap: resource gathering
 
 `gathering::gather` requires a job tool equipped (`tool_farmer` / `tool_herbalist` /

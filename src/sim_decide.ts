@@ -193,7 +193,7 @@ export const decide_turn = (
     chosen.push({ kind: picked.kind, spell: picked.spell, target_cell: picked.target_cell! })
     remaining_ap -= picked.ap_cost
     if (picked.spell) used_spell_names.add(picked.spell)
-    if (enemy_cells.has(picked.target_cell)) offensive_committed = true
+    if (enemy_cells.has(picked.target_cell!)) offensive_committed = true
   }
 
   const actions: FightCommand[] = []
