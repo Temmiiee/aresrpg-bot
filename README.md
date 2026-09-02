@@ -258,4 +258,13 @@ self-play RL agent *possible* for this game without spending gas to train it (un
 massively more compute and months of dedicated engineering than fits here. The learned
 spell-effectiveness tracking above is a small, real step in that direction; a genuinely
 stronger agent (shallow lookahead, or a small locally-trained self-play model) is a real,
-multi-day undertaking beyond it.
+multi-day undertaking beyond it — see the sibling `AresRPG-RL` repo for that actual effort
+(a Bun bridge into `@aresrpg/fight` driving a Python PPO/evolutionary training loop), which
+exports a validated policy into `learned_policy.local.json` for this bot to pick up.
+
+**Known tradeoff to revisit once that lands**: `fight_session.ts`'s `MAX_LEVEL_MARGIN` and
+`MIN_SIM_WIN_RATE` currently bias hard toward safe, winnable fights — which is why every recent
+session logs a 100% win rate, and also exactly why: avoiding anything risky enough to ever lose
+also avoids the higher-level groups with the better XP and loot. Once a trained policy
+measurably wins harder fights in fewer turns (`cli_validate_policy.ts`'s held-out comparison is
+the signal), those two constants should loosen — see the TODO at their definition.

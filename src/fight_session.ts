@@ -64,6 +64,18 @@ const SIM_SCREEN_CANDIDATES = 3
 const SIM_SCREEN_RUNS = 5
 // Below this simulated win rate, a group is skipped in favor of a lower-XP but safer one —
 // "avoid what we can't beat" from the fastest/most-rewarding-first ranking.
+//
+// TODO(revisit once AresRPG-RL exports a validated stronger policy — see learned_policy.local.json
+// and the sibling AresRPG-RL repo's tools/export_policy_to_bot.py): both MAX_LEVEL_MARGIN and
+// MIN_SIM_WIN_RATE currently bias hard toward SAFE fights, and it's working exactly as tuned —
+// every recent session is a 100% win rate. But that's the whole problem: avoiding anything risky
+// enough to ever lose also avoids the higher-level, higher-XP, better-loot groups a stronger
+// policy could actually take on (2026-09-02, measured live: a level-9 drop the fallback pricer
+// had been undervaluing turned out to be worth roughly a full fight's gas cost on its own —
+// harder fights are where the real reward is). Once a trained policy measurably lifts win rate
+// AND cuts turns-to-win on contested matchups (cli_validate_policy.ts's held-out comparison is
+// the signal to check), loosen these two knobs — a policy that wins harder fights faster can
+// afford to fight them at a lower safety margin than a fixed heuristic policy safely can.
 const MIN_SIM_WIN_RATE = 0.6
 // Don't walk into another fight under-healed — the lesson from going in at 1 HP after a loss.
 const MIN_HP_FRACTION = 0.8

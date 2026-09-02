@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { create_local_json_store } from './local_store.ts'
@@ -5,6 +6,19 @@ import { create_local_json_store } from './local_store.ts'
 const prices_store = create_local_json_store<Record<string, number>>(
   fileURLToPath(new URL('../item_prices.json', import.meta.url)),
   {}
+)
+
+// The authored level table — real, per-item data (values from 1 to 145+ across the seed content)
+// instead of guessing or requiring every caller to thread a level through by hand. Before this,
+// `value_drops` (fight loot) never had a level to pass at all, so every unknown-item drop
+// silently priced as if it were level 1 regardless of what actually dropped — a level-9
+// resource and a level-1 one landed on the exact same number.
+const ITEMS_PATH = fileURLToPath(new URL('../../../seed/content/items.json', import.meta.url))
+const ITEM_LEVEL_BY_TYPE: ReadonlyMap<string, number> = new Map(
+  (JSON.parse(readFileSync(ITEMS_PATH, 'utf8')) as { item_type: string; level: number }[]).map((i) => [
+    i.item_type,
+    i.level,
+  ])
 )
 
 // Default fallback prices in SUI for known items when market price is not listed
@@ -38,18 +52,28 @@ export type ValuationReport = {
 export const load_custom_prices = prices_store.read
 
 // No entry in item_prices.json or the drop-price table above (true for every equipment item_type
-// today — item_prices.json only carries the 7 raw materials) falls all the way back to this flat
-// floor. A level-1 trash drop and a level-60 rare shouldn't list identically, so the fallback
-// scales with level as a rough placeholder — real per-item prices belong in item_prices.json
-// once actual sales give a signal; this just keeps an uncalibrated first listing from being
-// wildly wrong in either direction.
-const FALLBACK_LEVEL_SCALING_PER_LEVEL = 0.05
+// today, and for most raw materials — item_prices.json only carries 7 of them) falls all the way
+// back to this flat floor. A level-1 trash drop and a level-145 one (the seed content's real
+// range) shouldn't list identically, so the fallback scales with the item's own authored level —
+// a POWER curve (level^EXPONENT), not flat-linear: a flat +5%/level was measured to undervalue
+// mid/high-level drops badly (a level-9 material landed at just 1.4x the level-1 floor; a
+// level-145 one at only ~8x, clearly implausible for gear this deep into the level range). This
+// is still an unverified guess, not a calibrated curve — the bot has no live market read at all
+// (see auto_sell.ts's header for why), so there is no ground truth to fit against. What this
+// number actually FEEDS: whether a fight logs as "profitable" against its gas cost, and the
+// auto-seller's very first listing price for an item type with no sale history yet — never an
+// actual floor/ceiling on a real transaction. auto_sell.ts's own pricing corrects toward reality
+// over time from real listing outcomes once there's history to learn from; this fallback only
+// ever gets that first guess in the right ballpark.
+const FALLBACK_LEVEL_SCALING_EXPONENT = 0.6
 
 /**
- * Returns estimated or actual marketplace price for an item type in SUI. `level`, when known,
- * only affects the flat unknown-item fallback — a custom or known-drop price is used as-is.
+ * Returns estimated or actual marketplace price for an item type in SUI. The item's own
+ * authored level (seed/content/items.json) drives the flat unknown-item fallback's scaling —
+ * always looked up here, so a caller can never forget to pass it, unlike a `level?` parameter.
+ * A custom or known-drop price is used as-is, un-scaled.
  */
-export const get_item_price = (item_type: string, level?: number): { unit_price_sui: number; estimated: boolean } => {
+export const get_item_price = (item_type: string): { unit_price_sui: number; estimated: boolean } => {
   const custom = load_custom_prices()
   if (typeof custom[item_type] === 'number') {
     return { unit_price_sui: custom[item_type], estimated: false }
@@ -58,7 +82,8 @@ export const get_item_price = (item_type: string, level?: number): { unit_price_
   if (typeof known === 'number') {
     return { unit_price_sui: known, estimated: true }
   }
-  const scale = 1 + Math.max(0, (level ?? 1) - 1) * FALLBACK_LEVEL_SCALING_PER_LEVEL
+  const level = ITEM_LEVEL_BY_TYPE.get(item_type) ?? 1
+  const scale = Math.max(1, level) ** FALLBACK_LEVEL_SCALING_EXPONENT
   return { unit_price_sui: Number((DEFAULT_FALLBACK_PRICE_SUI * scale).toFixed(6)), estimated: true }
 }
 

@@ -36,7 +36,7 @@ export const plan_auto_sell = async (bot: BotSdk): Promise<SellDecision[]> => {
   return items
     .filter((item) => !open_item_ids.has(item.id))
     .map((item): SellDecision => {
-      const { unit_price_sui, estimated } = get_item_price(item.item_type, item.level)
+      const { unit_price_sui, estimated } = get_item_price(item.item_type)
       const base_price_mist = mist_of_sui(unit_price_sui)
       const price_mist = suggest_listing_price_mist(item.item_type, base_price_mist, history)
       return {
