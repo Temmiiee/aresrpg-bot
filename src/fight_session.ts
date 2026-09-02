@@ -284,18 +284,17 @@ const find_active_fight_id = async (
     const owner = (object?.owner as { ObjectOwner?: unknown })?.ObjectOwner
     return typeof owner === 'string' ? owner : null
   }
+  // The gRPC transport accepts `owner` in `include` at runtime; SuiTransport's own declared type
+  // only names `json` (client.ts's narrower structural interface for the SDK's OWN needs) — this
+  // local widening reflects the real, wider runtime contract without touching the shared SDK.
+  const get_objects_with_owner = (input: { objectIds: string[]; include: { owner?: boolean; json?: boolean } }) =>
+    sdk.sui_client.core.getObjects(input as { objectIds: string[]; include?: { json?: boolean } })
   try {
-    const { objects: r1 } = await sdk.sui_client.core.getObjects({
-      objectIds: [character_id],
-      include: { owner: true },
-    })
+    const { objects: r1 } = await get_objects_with_owner({ objectIds: [character_id], include: { owner: true } })
     const p1 = owner_id(r1[0])
     if (!p1) return null
 
-    const { objects: r2 } = await sdk.sui_client.core.getObjects({
-      objectIds: [p1],
-      include: { owner: true, json: true },
-    })
+    const { objects: r2 } = await get_objects_with_owner({ objectIds: [p1], include: { owner: true, json: true } })
     if (is_fight(r2[0]?.type)) return p1
     const p2 = owner_id(r2[0])
     if (!p2) return null
@@ -424,7 +423,7 @@ const find_or_create_fight = async (
           world: WORLD,
           zx,
           zz,
-          group_index: target.index,
+          group_index: BigInt(target.index),
           mob_types: mobs.map((m) => m.mob_type),
           access: 1,
         }),

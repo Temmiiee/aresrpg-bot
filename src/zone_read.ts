@@ -24,13 +24,25 @@ const ResourcePack = bcs.struct('ResourcePack', {
   nodes: bcs.u8(),
 })
 
+// index is a real runtime STRING, not bigint: @mysten/sui's bcs.u64() normalizes u64/u128/u256
+// to decimal strings on parse (a JS number can't safely hold every u64 value, and bigint has its
+// own JSON-serialization friction) — `bcs.u64(): BcsType<string, string | number | bigint>`, the
+// first type parameter being the parsed OUTPUT. Declaring these as bigint (as this file used to)
+// was a type lie papered over with a cast; callers that need a bigint (fight.engage's
+// group_index) convert explicitly at the call site instead.
 export type MobGroupView = {
-  index: bigint
+  index: string
   x: number
   z: number
   members: { mob_type: string; level_scalar: number }[]
 }
-export type ResourcePackView = { index: bigint; x: number; z: number; item_type: string; nodes: number }
+export type ResourcePackView = { index: string; x: number; z: number; item_type: string; nodes: number }
+
+// The gRPC transport's simulateTransaction result carries `commandResults` when asked for via
+// `include`; the shared `Receipt` type (client.ts's structural interface for the SDK's OWN
+// needs) doesn't name it. Local widening reflects the real, wider runtime contract without
+// touching the shared SDK.
+type SimulateCommandResults = { commandResults?: { returnValues?: { bcs: Uint8Array }[] }[] }
 
 /** One bare (no math-init prelude) simulated Move call, decoded from its first return value. */
 const simulate_view_call = async (
@@ -43,7 +55,7 @@ const simulate_view_call = async (
   const result = await sdk.simulate(tx, { include: { commandResults: true, effects: true } })
   if (result.$kind === 'FailedTransaction')
     throw new Error(`view call ${target} failed: ${JSON.stringify(result.FailedTransaction?.effects?.status)}`)
-  const bytes = result.commandResults?.[0]?.returnValues?.[0]?.bcs
+  const bytes = (result as unknown as SimulateCommandResults).commandResults?.[0]?.returnValues?.[0]?.bcs
   if (!bytes) throw new Error(`view call ${target} returned nothing`)
   return bytes
 }
@@ -72,7 +84,7 @@ export const read_mob_groups = async (
     tx.pure.u32(zx),
     tx.pure.u32(zz),
   ])
-  return bcs.vector(MobGroup).parse(bytes) as MobGroupView[]
+  return bcs.vector(MobGroup).parse(bytes)
 }
 
 /** One resource pack by index (aborts ENothingThere past the last live pack — probe index 0..
@@ -92,5 +104,5 @@ export const read_resource_pack = async (
     tx.pure.u32(zz),
     tx.pure.u64(index),
   ])
-  return ResourcePack.parse(bytes) as ResourcePackView
+  return ResourcePack.parse(bytes)
 }
