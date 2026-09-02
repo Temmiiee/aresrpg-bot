@@ -231,12 +231,10 @@ locally — this repo plus a fresh clone of the game's private `@aresrpg/sdk`, `
 weekly schedule independent of any push here**, so a game update that moves one of those
 packages out from under the bot gets caught even when nobody touched this repo that week — the
 one signal the scheduled game-changelog review can't give, since that routine has no access to
-this source to compare against.
-
-Known, currently-unavoidable baseline (not a regression, present from this repo's first commit):
-5 type errors rooted in the shared `@aresrpg/sdk` package's own type declarations (a narrower
-`include` type on `getObjects` than the gRPC transport actually accepts, and a `Receipt` type
-missing `commandResults`) — fixing them means editing that shared package, not this bot.
+this source to compare against. Typechecks fully clean — a few spots that used to lean on the
+shared SDK's own narrower structural types (or on a plain cast papering over a real mismatch,
+like `zone_read.ts`'s mob-group `index` once being declared `bigint` when `bcs.u64()` actually
+parses to a decimal string) are widened or corrected locally, without touching that shared package.
 
 ## Known gap: resource gathering
 
