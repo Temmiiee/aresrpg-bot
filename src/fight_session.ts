@@ -102,6 +102,8 @@ type FighterJson = {
       fire_res: string | number
       water_res: string | number
       air_res: string | number
+      mob_type?: string
+      loot?: { item_type: string }[]
     }
   }
 }
@@ -919,6 +921,33 @@ const run_turn_loop = async (
 type RawDrop = { item_type?: string; qty?: number } | string
 const drop_item_type = (d: RawDrop): string | undefined => (typeof d === 'string' ? d : d?.item_type)
 
+// The set of item_types settle() might need to hand over for THIS fight, from every enemy mob's
+// own loot table (already present on their live fighter snapshot — no seed-content lookup or
+// extra read needed). Must be the full possible pool, not just what a pre-roll read of this
+// character's OWN `drops` field currently shows: fight.move only actually ROLLS loot (mob
+// tables -> a random split across winning seats) inside the FIRST successful settle call in the
+// whole fight (`roll_and_split`, guarded by `drops_rolled`) — so whichever character settles
+// first reads `drops` BEFORE anything has been rolled, sees it empty, and would authenticate
+// zero templates. If that same roll then assigns THEM a non-empty share (their own settle is
+// also where the roll executes, atomically), the chain has nowhere to deliver it: item.move's
+// deliver_drops walks the caller's pre-authenticated plan for a matching template and, finding
+// none, walks off the vector's end — `MoveAbort ... abort code: 131072`, Move's own
+// EINDEX_OUT_OF_BOUNDS, not a game-defined code. That's a PERMANENT, deterministic abort for
+// this exact fight — retrying changes nothing, since it re-derives the identical empty read
+// every time (confirmed live 2026-09-02: every character, both a fresh attempt and the
+// resumed retry, all four failing on the same fight, one attempt even burning real gas after
+// clearing the free pre-flight simulation). Authenticating every possible template up front
+// costs a little extra (harmless — `PM has drop`, an unclaimed template is just discarded, no
+// abort, no dangling resource) and is the only way to be correct regardless of settle order.
+const possible_loot_item_types = (state_json: FightJson): Set<string> => {
+  const item_types = new Set<string>()
+  for (const fighter of state_json.fighters) {
+    if (fighter.kind['@variant'] === 'Player') continue
+    for (const drop of fighter.kind.pos0?.loot ?? []) item_types.add(drop.item_type)
+  }
+  return item_types
+}
+
 const settle_all = async (
   bot: BotSdk,
   fight_id: string,
@@ -938,18 +967,15 @@ const settle_all = async (
     const idx = fighter_indices(state_json).get(c.id)
     if (idx === undefined || state_json.fighters[idx]!.settled) continue
     log(`settling ${c.name}…`)
+    // Best-effort reporting only (this character's pre-roll snapshot, possibly empty/stale —
+    // see possible_loot_item_types' header comment) — never what gets sent to settle() itself.
     const raw_drops = ((state_json.fighters[idx] as unknown as { drops?: RawDrop[] })?.drops ?? []) as RawDrop[]
     for (const d of raw_drops) {
       const item_type = drop_item_type(d)
       const qty = typeof d === 'object' && typeof d.qty === 'number' ? d.qty : 1
       if (item_type) drops[item_type] = (drops[item_type] ?? 0) + qty
     }
-    const loot = [...new Set(raw_drops.map(drop_item_type).filter((t): t is string => Boolean(t)))].map(
-      (item_type) => ({
-        item_type,
-        existing: null,
-      })
-    )
+    const loot = [...possible_loot_item_types(state_json)].map((item_type) => ({ item_type, existing: null }))
     try {
       await submit_with_retry(() => fight.settle({ fight: fight_id, fighter_idx: BigInt(idx), loot }), log)
     } catch (error) {
