@@ -77,3 +77,13 @@ export const ensure_min_balance = async (
 }
 
 export const mist_to_sui_string = (mist: bigint): string => (Number(mist) / Number(MIST_PER_SUI)).toFixed(4)
+
+/** How long until a prior rate-limit cooldown clears, or 0 if none is active. Lets a caller that
+ *  hits a real "insufficient balance" transaction failure back off for as long as topping up is
+ *  known to be pointless, instead of retrying on its own unrelated schedule (see
+ *  cli_group_session.ts — retrying every 30s here would just reproduce the exact faucet-hammering
+ *  pattern RATE_LIMIT_COOLDOWN_MS was added to stop, one layer up). */
+export const faucet_cooldown_remaining_ms = (): number => {
+  const cooldown = cooldown_store.read()
+  return cooldown ? Math.max(0, cooldown.until_ms - Date.now()) : 0
+}

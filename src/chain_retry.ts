@@ -35,6 +35,11 @@ const is_object_lock_race = (error: unknown): boolean => {
 }
 export const is_transient = (error: unknown): boolean => is_too_soon_abort(error) || is_object_lock_race(error)
 
+// The SDK's own gas-coin-selection failure, thrown before a transaction is even built — never
+// worth an immediate retry (nothing changes in the next few seconds; only a faucet top-up or a
+// fight's own gas refunds move the needle), see cli_group_session.ts's backoff on this.
+export const is_insufficient_balance = (error: unknown): boolean => /insufficient sui balance/i.test(message_of(error))
+
 // fight.move abort codes that just mean "this candidate attack doesn't work from here" —
 // expected, frequent outcomes of fight_session.ts's try-every-candidate loop, not real problems:
 // EOutOfRange(1716) ENoLineOfSight(1717) ENotInLine(1718) EBadTargetCell(1720) ECapReached(1721)

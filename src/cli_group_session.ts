@@ -7,24 +7,37 @@
 import { get_enoki_signer } from './enoki_auth.ts'
 import { create_bot_sdk } from './sdk_client.ts'
 import { run_one_group_fight } from './fight_session.ts'
-import { message_of } from './chain_retry.ts'
+import { message_of, is_insufficient_balance } from './chain_retry.ts'
 import { read_position, write_position } from './position_state.ts'
 import { append_log, clear_log, type FightLogEntry } from './session_log.ts'
 import { GAS_WARN_MIST, mist_to_sui } from './session_stats.ts'
 import { write_status } from './status_state.ts'
 import { CHARACTERS } from './party_config.ts'
 import { value_drops, calculate_farming_profit } from './item_valuation.ts'
-import { ensure_min_balance, mist_to_sui_string } from './faucet.ts'
+import { ensure_min_balance, mist_to_sui_string, faucet_cooldown_remaining_ms } from './faucet.ts'
 
 const DELAY_BETWEEN_FIGHTS_MS = 5_000
 const RETRY_DELAY_MS = 30_000
 const NO_TARGET_RETRY_DELAY_MS = 10 * 60_000 // zones only reroll every 2h — no point hammering
+// A gas-selection "insufficient balance" failure means nothing will change for a while — the
+// same reasoning that got the faucet itself a cooldown (faucet.ts) applies one layer up: retrying
+// every 30s here would just spend that whole window re-attempting a doomed transaction instead of
+// waiting it out. Floor of 2min covers the case where the wallet is simply low but the faucet was
+// never actually rate-limited (no cooldown tracked yet) — still much less aggressive than 30s.
+const INSUFFICIENT_BALANCE_MIN_RETRY_DELAY_MS = 2 * 60_000
 
 const max_fights = process.argv[2] ? Number(process.argv[2]) : Infinity
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const timestamp = () => new Date().toISOString().slice(11, 19)
 const describe_mobs = (mobs: readonly { mob_type: string; level: number }[]) =>
   mobs.map((m) => `${m.mob_type}(lv${m.level})`).join(', ')
+
+const retry_delay_ms = (error: unknown, message: string): number => {
+  if (/No group in this zone is within reach/.test(message)) return NO_TARGET_RETRY_DELAY_MS
+  if (is_insufficient_balance(error))
+    return Math.max(INSUFFICIENT_BALANCE_MIN_RETRY_DELAY_MS, faucet_cooldown_remaining_ms())
+  return RETRY_DELAY_MS
+}
 
 const main = async () => {
   clear_log()
@@ -112,8 +125,7 @@ const main = async () => {
         xp_gained: {},
         error: message,
       })
-      const no_target = /No group in this zone is within reach/.test(message)
-      const delay = no_target ? NO_TARGET_RETRY_DELAY_MS : RETRY_DELAY_MS
+      const delay = retry_delay_ms(error, message)
       console.log(`waiting ${(delay / 1000).toFixed(0)}s before retrying…`)
       await sleep(delay)
     }
