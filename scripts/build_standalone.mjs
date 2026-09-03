@@ -37,6 +37,7 @@ const BOT_LOCAL_STATE_FILES = [
   'spell-memory.local.json',
   'learned_policy.local.json',
   'market_history.local.json',
+  'faucet-cooldown.local.json',
 ]
 
 // `exclude` matches by basename only — every excluded name here is a top-level file/dir
