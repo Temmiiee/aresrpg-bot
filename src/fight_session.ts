@@ -17,7 +17,12 @@ import { read_mob_groups } from './zone_read.ts'
 import { approach_path, find_cast_cell, manhattan, path_to, type SimState } from './fight_geometry.ts'
 import { CHARACTERS, LEADER, PARTY_ID, WORLD } from './party_config.ts'
 import { estimate_max_hp, ms_until_fraction, read_hp_state, write_hp_state, type HpState } from './hp_state.ts'
-import { PRIMARY_STAT_BY_CLASS, split_stat_spending } from './stat_allocation.ts'
+import {
+  PRIMARY_STAT_BY_CLASS,
+  split_stat_spending,
+  caster_damage_multiplier,
+  type LiveStats,
+} from './stat_allocation.ts'
 import {
   simulate_many,
   fitness_score,
@@ -218,16 +223,30 @@ const raise_available_stats = async (
 // field, a separate query), just keep raising the best-scoring known damage spell and stop on
 // the first "can't afford the next level"/"already capped" abort — both expected, not real
 // problems, bounded by available_spell_points attempts at most.
+//
+// "Best" is ranked by REAL expected damage, not spell_catalog.ts's raw authored score alone:
+// caster_damage_multiplier folds in the character's own live stats through the exact in-game
+// formula (fight_math::amplify_damage), and success_rate folds in how often this spell has
+// actually landed for this class when tried. A spell with a great raw number but the wrong
+// element for this build gets a 1.0x (or near it) multiplier — no better than a weapon strike —
+// while a lower-raw-score spell the build actually amplifies can be the real pick. Same weighting
+// decide_and_commit_turn uses to CAST each turn, so what gets leveled matches what actually
+// carries the fight, not just what a static number ranked highest.
 const raise_best_damage_spell = async (
   character: BotSdk['character'],
   c: (typeof CHARACTERS)[number],
   level: number,
+  stats: LiveStats,
   available_spell_points: number,
   log: (msg: string) => void
 ): Promise<void> => {
   const [best_damage_spell] = castable_spells(c.classe, level)
     .filter((s) => s.role === 'damage')
-    .sort((a, b) => b.score - a.score)
+    .map((s) => ({
+      ...s,
+      effective_score: s.score * caster_damage_multiplier(s.element, stats) * success_rate(c.classe, s.name),
+    }))
+    .sort((a, b) => b.effective_score - a.effective_score)
   if (!best_damage_spell) return
 
   let raised = 0
@@ -271,7 +290,7 @@ const prepare_party = async (bot: BotSdk, log: (msg: string) => void): Promise<P
     xp_before.set(c.id, live.experience)
 
     if (live.available_spell_points > 0)
-      await raise_best_damage_spell(character, c, level, live.available_spell_points, log)
+      await raise_best_damage_spell(character, c, level, stats, live.available_spell_points, log)
 
     sim_party_stats.set(c.id, { name: c.name, classe: c.classe, level, ...stats })
   }
@@ -574,6 +593,9 @@ const decide_and_commit_turn = async (
   const heal_deficit = wounded && wounded.fraction < HEAL_THRESHOLD ? 1 - wounded.fraction : 0
 
   const known_spells = castable_spells(acting.classe, prep.levels.get(acting.id) ?? 1)
+  const caster_stats = prep.sim_party_stats.get(acting.id)
+  const caster_multiplier = (element: string | null): number =>
+    caster_stats ? caster_damage_multiplier(element, caster_stats) : 1
   const priority_weight = (rank: number) => 1 / (rank + 1) ** DECISION_POLICY.priority_decay
   const finish_bonus = (enemy: (typeof enemies_by_priority)[number]): number => {
     const enemy_max_hp = enemy.kind.pos0 ? as_number(enemy.kind.pos0.max_hp) : as_number(enemy.hp)
@@ -604,7 +626,11 @@ const decide_and_commit_turn = async (
             ap_cost: s.ap_cost,
             target_cell: BigInt(as_number(enemy.cell)),
             score:
-              DECISION_POLICY.base_weight * s.score * success_rate(acting.classe, s.name) * priority_weight(rank) +
+              DECISION_POLICY.base_weight *
+                s.score *
+                caster_multiplier(s.element) *
+                success_rate(acting.classe, s.name) *
+                priority_weight(rank) +
               finish_bonus(enemy) +
               element_bonus(enemy, s.element),
           })

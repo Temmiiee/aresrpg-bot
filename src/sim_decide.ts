@@ -9,6 +9,7 @@ import type { FightCommand, HydratedFightCheckpoint } from '@aresrpg/fight'
 import { castable_spells } from './spell_catalog.ts'
 import { approach_path, find_cast_cell, manhattan, path_to, type SimState } from './fight_geometry.ts'
 import { DEFAULT_POLICY, element_advantage, type Policy } from './policy.ts'
+import { caster_damage_multiplier } from './stat_allocation.ts'
 
 const ASSUMED_STRIKE_AP_COST = 4n
 const HEAL_THRESHOLD = 0.8
@@ -101,6 +102,12 @@ export const decide_turn = (
   const heal_deficit = wounded && wounded.fraction < HEAL_THRESHOLD ? 1 - wounded.fraction : 0
 
   const known_spells = castable_spells(character.classe, Number(character.level))
+  const caster_stats = {
+    strength: Number(character.strength),
+    intelligence: Number(character.intelligence),
+    chance: Number(character.chance),
+    agility: Number(character.agility),
+  }
   const build_candidates = (): Candidate[] => {
     const list: Candidate[] = []
     for (const s of known_spells) {
@@ -115,7 +122,10 @@ export const decide_turn = (
             ap_cost: s.ap_cost,
             target_cell: enemy.cell,
             score:
-              policy.base_weight * s.score * priority_weight(rank, policy.priority_decay) +
+              policy.base_weight *
+                s.score *
+                caster_damage_multiplier(s.element, caster_stats) *
+                priority_weight(rank, policy.priority_decay) +
               finish_bonus(enemy) +
               element_bonus(enemy, s.element),
           })

@@ -17,6 +17,35 @@ export const PRIMARY_STAT_BY_CLASS: Readonly<Record<string, CharacteristicName>>
   mori: 'strength',
 }
 
+export type LiveStats = Readonly<{ strength: number; intelligence: number; chance: number; agility: number }>
+
+// aresrpg_math::fight_math::primary_stat's exact element -> stat lookup — the SAME mapping the
+// comment above already describes, made into real data so spell selection can use it too (see
+// caster_damage_multiplier below), not just this file's own stat-spending choice. Typed to
+// LiveStats's own 4 keys (not the full 6-way CharacteristicName vitality/wisdom belong to) since
+// primary_stat's Move implementation only ever returns one of these four.
+const STAT_BY_ELEMENT: Readonly<Record<string, keyof LiveStats>> = {
+  earth: 'strength',
+  fire: 'intelligence',
+  water: 'chance',
+  air: 'agility',
+}
+
+/** The EXACT in-game multiplier (fight_math::amplify_damage: `base × (100 + primary) / 100 +
+ *  raw_damage`) a spell of this element gets from the character's CURRENT live stats — 1.0 (no
+ *  bonus at all) for an element the character has never put a point toward, regardless of how
+ *  good the spell's authored numbers look on paper. Measured live 2026-09-03: a pure-strength
+ *  senshi's top-scored known spell by spell_catalog.ts's raw score alone was an AIR spell (0
+ *  agility invested) — real multiplier 1.0x — while a lower-raw-score EARTH spell they also knew
+ *  would have hit for 1.42x. Scoring by raw authored damage alone, with no caster-side
+ *  amplification, systematically favors whichever spell happens to look best on paper over
+ *  whichever the character can actually deal real damage with. */
+export const caster_damage_multiplier = (element: string | null, stats: LiveStats): number => {
+  if (!element) return 1
+  const stat = STAT_BY_ELEMENT[element]
+  return (100 + (stat ? stats[stat] : 0)) / 100
+}
+
 // cli_tune.ts's search (2026-08-31, 2 matchups x 16 grid cells) put the RAW best score at
 // share=1.0 (all-offense, zero new vitality) — but that's a corner value from a small matchup
 // sample, and losing ALL new HP margin on the strength of two test fights felt like overfitting.

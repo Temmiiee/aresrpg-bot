@@ -91,8 +91,18 @@ const MOB_BAND_BY_TYPE = new Map(
   ALL_MOB_ROWS.map((m) => [m.mob_type, { level_min: m.level_min, level_max: m.level_max }])
 )
 
-const CALIBRATION_PROBE_RUNS = 4
-const CALIBRATION_ATTEMPTS = 5
+// PROBE_RUNS=4/ATTEMPTS=5 (measured 2026-09-03, cross-referencing the sibling AresRPG-RL
+// repo's own calibration-reliability finding): a 4-run probe is too small a sample to
+// reliably classify a scenario -- a genuinely 5%-true-win-rate scenario still has a ~17%
+// chance of showing 1/4=25% and getting accepted as "contested" on pure sampling noise.
+// Confirmed happening: cli_validate_policy.ts, run against a real trained policy, found
+// several of its 12 "calibrated" scenarios at a literal 100% or 13% win rate under a
+// proper 8-run evaluation -- both default and learned policies alike, meaning those
+// scenarios could never have shown either policy's improvement regardless of how good it
+// was. Widened both knobs; ~1.3s/fight measured locally, so the worst case (probe runs x
+// attempts) costs a bounded, one-time-per-scenario-set amount more, not per generation.
+const CALIBRATION_PROBE_RUNS = 8
+const CALIBRATION_ATTEMPTS = 8
 const CONTESTED_MIN_WIN_RATE = 0.15
 const CONTESTED_MAX_WIN_RATE = 0.9
 
