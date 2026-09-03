@@ -17,7 +17,8 @@
     "train": "bun run src/cli_train.ts",
     "validate-policy": "bun run src/cli_validate_policy.ts",
     "simulate-session": "bun run src/cli_simulate_session.ts",
-    "build-standalone": "bun run scripts/build_standalone.mjs"
+    "build-standalone": "bun run scripts/build_standalone.mjs",
+    "reset-character": "bun run src/cli_reset_character.ts"
   },
   "dependencies": {
     "@aresrpg/fight": "workspace:*",

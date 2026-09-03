@@ -236,6 +236,22 @@ shared SDK's own narrower structural types (or on a plain cast papering over a r
 like `zone_read.ts`'s mob-group `index` once being declared `bigint` when `bcs.u64()` actually
 parses to a decimal string) are widened or corrected locally, without touching that shared package.
 
+## Fixing an already-misallocated character
+
+`prepare_party` only shapes NEW stat/spell points — it never retroactively fixes points already
+spent before `DEFAULT_PRIMARY_STAT_SHARE` (stat_allocation.ts) or `caster_damage_multiplier`
+existed, or before the game had a "reset" concept a player might have spent freely against.
+`bun run reset-character <name> [--stats-only|--spells-only]` buys `scroll_of_rebirth`
+(`character.move`'s `reset_stats` — every level-granted point returns) and/or
+`scroll_of_oblivion` (`progression.move`'s `reset_spells` — the raised-spell book clears, points
+refund) from the shop and uses one of each on the named character. It reads each scroll's price
+LIVE off its on-chain `Sale` object and refuses to spend anything if the wallet can't cover the
+total — seed/content/shop.json's own `"price": 5` reads as 5 MIST at a glance but is actually
+5 SUI (5,000,000,000 MIST) once deployed; a hardcoded assumption based on the seed file aborted
+live on `shop.move`'s `EWrongPayment` before this was caught. The very next `group-fight` /
+`session` run re-spends the refunded points correctly through the normal `prepare_party` flow —
+this script only clears the slate, nothing more.
+
 ## Known gap: resource gathering
 
 `gathering::gather` requires a job tool equipped (`tool_farmer` / `tool_herbalist` /
