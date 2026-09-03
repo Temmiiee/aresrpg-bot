@@ -9,6 +9,7 @@ import type { FightMobInput, FightPlayerInput, HydratedFightCheckpoint } from '@
 import { decide_turn } from './sim_decide.ts'
 import { find_mob_template, all_spell_sources } from './sim_content.ts'
 import { DEFAULT_POLICY, type Policy } from './policy.ts'
+import { get_item_price } from './item_valuation.ts'
 
 /** The shape of both sim_decide.ts's decide_turn and lookahead.ts's decide_turn_with_lookahead
  *  — simulate_fight doesn't care which one it's driving with. */
@@ -130,6 +131,9 @@ export type SimBatchResult = {
   avg_turns: number
   avg_rounds: number
   avg_final_hp_fraction_when_won: number
+  /** Only over WINS -- see fitness_score's comment for why avg_turns (pooled over wins and
+   *  losses) can't be the thing scored. */
+  avg_turns_when_won: number
   /** Total party XP per turn spent, across ALL runs (losses count as 0 XP but still cost
    *  turns) — the "fastest to beat for the most reward" ranking signal in one number. */
   avg_xp_per_turn: number
@@ -141,10 +145,62 @@ export type SimBatchResult = {
 // real, substantial factor: 100 fewer turns is worth as much as a 33-point win-rate swing.
 // The single number cli_train.ts, cli_tune.ts, and fight_session.ts's pre-engage screening all
 // rank candidates by — keeping "winning fast matters most" consistent everywhere it's used.
+//
+// Scores avg_turns_when_won, NOT the pooled avg_turns across wins and losses (2026-09-03,
+// flagged by the project owner): penalizing turn count on ALL outcomes rewards a policy for
+// dying FASTER in the fights it loses, which is exactly backwards — speed should only ever
+// be a tiebreaker among ways of WINNING. A scenario the policy never wins scores 0 from this
+// term regardless of how long the losses took (not a bug — losing fast and losing slow are
+// both just losing; win_rate already penalizes not winning at full WIN_RATE_SCALE weight).
+// This exact same flaw existed in the sibling AresRPG-RL repo's Python port too — fixed
+// there in the same pass, see rl/evolve.py.
 const WIN_RATE_SCALE = 300
 const TURN_PENALTY = 1
 export const fitness_score = (result: SimBatchResult): number =>
-  result.win_rate * WIN_RATE_SCALE - result.avg_turns * TURN_PENALTY
+  result.win_rate * WIN_RATE_SCALE - result.avg_turns_when_won * TURN_PENALTY
+
+/** Expected SUI value of one fight's loot, straight off the mobs' own authored drop tables —
+ *  entirely offline, no gas, no chain read (seed content is static). Uses the RAW chance_bp, not
+ *  the party's actual Chance-boosted roll (fight.move's roll_and_split scales it by team Chance,
+ *  capped at 10000bp) — a deliberate underestimate, since it's safer to undervalue a fight's
+ *  reward than to chase one on an inflated expectation with no real market data behind it
+ *  (item_valuation.ts's own honest limitation). An unrecognized mob_type (a game-content update
+ *  the seed content hasn't caught up to yet) is skipped rather than aborting the whole estimate. */
+export const expected_loot_value_sui = (mob_group: readonly SimMobGroupMember[]): number => {
+  let total = 0
+  for (const { mob_type } of mob_group) {
+    let template
+    try {
+      template = find_mob_template(mob_type)
+    } catch {
+      continue
+    }
+    for (const drop of template.loot) {
+      const chance = Number(drop.chance_bp) / 10_000
+      const avg_qty = (Number(drop.min_qty) + Number(drop.max_qty)) / 2
+      total += chance * avg_qty * get_item_price(drop.item_type).unit_price_sui
+    }
+  }
+  return total
+}
+
+// Reward-aware ranking for CHOOSING which group to engage — separate from fitness_score, which
+// stays win-rate/speed only: a POLICY's job is to win whatever it's given efficiently, regardless
+// of target, so training should never optimize it for "picks profitable fights." Group selection
+// is the opposite job — among candidates a policy can ALREADY reliably beat (the caller applies
+// MIN_SIM_WIN_RATE as a hard gate before ever calling this), prefer whichever pays out more per
+// turn, since turns are what cost real gas — "reward per gas," not just raw reward. XP and loot
+// sit on very different scales (tens-to-low-thousands of XP vs. hundredths of a SUI) with no real
+// exchange rate between them absent live market data, so they're kept as two independently
+// weighted terms rather than a fabricated combined unit — SUI_PER_TURN_WEIGHT is a rough scale
+// pick (a typical ~0.01-0.05 SUI/turn single-material drop registers like a modest XP swing,
+// neither negligible nor dominant), a first cut for a real cli_tune.ts-style search later.
+const XP_PER_TURN_WEIGHT = 1
+const SUI_PER_TURN_WEIGHT = 2_000
+export const reward_score = (result: SimBatchResult, mob_group: readonly SimMobGroupMember[]): number => {
+  const loot_per_turn = result.avg_turns > 0 ? expected_loot_value_sui(mob_group) / result.avg_turns : 0
+  return result.avg_xp_per_turn * XP_PER_TURN_WEIGHT + loot_per_turn * SUI_PER_TURN_WEIGHT
+}
 
 /** Runs `runs` fights with distinct seeds and aggregates — the actual "can we beat this, and
  *  how cleanly" answer, since a single fight's outcome depends on crit/dodge rolls. */
@@ -169,6 +225,7 @@ export const simulate_many = (
     avg_turns: avg(outcomes.map((o) => o.turns)),
     avg_rounds: avg(outcomes.map((o) => o.rounds)),
     avg_final_hp_fraction_when_won: avg(wins.flatMap((o) => Object.values(o.final_hp_fraction))),
+    avg_turns_when_won: avg(wins.map((o) => o.turns)),
     avg_xp_per_turn: total_turns > 0 ? total_xp / total_turns : 0,
   }
 }

@@ -25,7 +25,7 @@ import {
 } from './stat_allocation.ts'
 import {
   simulate_many,
-  fitness_score,
+  reward_score,
   type SimBatchResult,
   type SimMobGroupMember,
   type SimPartyMember,
@@ -58,29 +58,28 @@ const WAIT_MARGIN_MS = 4_000
 const TURN_MIN_MS = 3_000
 const TURN_WAIT_MARGIN_MS = 500
 // A mob group is skipped unless its average member level is within this many levels of the
-// party's own average — the lesson from the moka fight (avg level 7.3 vs party avg 4.5). Kept
-// as a cheap pre-filter before the simulated screening below (no point simulating something
-// wildly out of range).
-const MAX_LEVEL_MARGIN = 2
-// How many of the closest level-eligible groups get an actual offline simulation before
-// engaging — bounded because each batch costs real wall-clock time (harder matchups run
-// several seconds), not because it costs gas (it doesn't).
-const SIM_SCREEN_CANDIDATES = 3
+// party's own average. Was 2 (the lesson from the moka fight, avg level 7.3 vs party avg 4.5,
+// back when nothing screened harder groups at all before engaging) — widened once real
+// simulation became the actual safety check (MIN_SIM_WIN_RATE below): this is now only a cheap
+// pre-filter against truly hopeless matchups, not the winnability gate itself, so it can afford
+// to let much harder — and more rewarding — groups through to simulation (2026-09-03, user
+// request: prefer harder-but-still-winnable fights over always the safest one).
+const MAX_LEVEL_MARGIN = 8
+// How many level-eligible groups get an actual offline simulation before engaging — bounded
+// because each one costs real wall-clock time (harder matchups run several seconds), not because
+// it costs gas (it doesn't). Raised alongside MAX_LEVEL_MARGIN so opening the level range doesn't
+// just get shadowed by an unchanged cap — see the pre-sort below for which groups fill it first
+// when there are more eligible ones than this.
+const SIM_SCREEN_CANDIDATES = 10
 const SIM_SCREEN_RUNS = 5
-// Below this simulated win rate, a group is skipped in favor of a lower-XP but safer one —
-// "avoid what we can't beat" from the fastest/most-rewarding-first ranking.
-//
-// TODO(revisit once AresRPG-RL exports a validated stronger policy — see learned_policy.local.json
-// and the sibling AresRPG-RL repo's tools/export_policy_to_bot.py): both MAX_LEVEL_MARGIN and
-// MIN_SIM_WIN_RATE currently bias hard toward SAFE fights, and it's working exactly as tuned —
-// every recent session is a 100% win rate. But that's the whole problem: avoiding anything risky
-// enough to ever lose also avoids the higher-level, higher-XP, better-loot groups a stronger
-// policy could actually take on (2026-09-02, measured live: a level-9 drop the fallback pricer
-// had been undervaluing turned out to be worth roughly a full fight's gas cost on its own —
-// harder fights are where the real reward is). Once a trained policy measurably lifts win rate
-// AND cuts turns-to-win on contested matchups (cli_validate_policy.ts's held-out comparison is
-// the signal to check), loosen these two knobs — a policy that wins harder fights faster can
-// afford to fight them at a lower safety margin than a fixed heuristic policy safely can.
+// The hard safety floor: a group under this simulated win rate is skipped no matter how
+// rewarding it looks — "always winnable" stays non-negotiable; reward_score (simulate.ts) only
+// ever ranks candidates that already clear it. Deliberately NOT loosened alongside
+// MAX_LEVEL_MARGIN above (2026-09-03, explicit user instruction: focus fights that are ALWAYS
+// winnable, just don't rule out harder/farther ones a-priori before simulation gets to check).
+// Revisit only once AresRPG-RL exports a validated stronger policy (learned_policy.local.json,
+// the sibling repo's tools/export_policy_to_bot.py) that measurably wins harder fights faster —
+// cli_validate_policy.ts's held-out comparison is the signal to check first.
 const MIN_SIM_WIN_RATE = 0.6
 // Don't walk into another fight under-healed — the lesson from going in at 1 HP after a loss.
 const MIN_HP_FRACTION = 0.8
@@ -409,32 +408,41 @@ const find_or_create_fight = async (
     )
   }
 
-  // Simulate the closest few candidates against the party's REAL current stats (free, no gas,
-  // only wall-clock cost) instead of just picking whichever passes the crude level-margin filter
-  // — prefer a real win-rate/speed answer over a guess. Falls back to the old closest-first pick
-  // if simulation fails (e.g. an unrecognized mob_type) or nothing clears the win-rate bar —
-  // better than refusing to fight at all.
-  type ScreenedGroup = { group: (typeof easy_enough)[number]; sim: SimBatchResult | null }
+  // Simulate the toughest level-eligible candidates first against the party's REAL current stats
+  // (free, no gas, only wall-clock cost) — when there are more eligible groups than
+  // SIM_SCREEN_CANDIDATES can afford to check, spend that budget on the hardest ones, since those
+  // are exactly the higher-XP/better-loot groups worth confirming winnable (2026-09-03: "chercher
+  // des monstres de niveau plus élevé mais qu'on pourrait toujours battre" — the softer/closer
+  // groups this leaves unsimulated are also the ones least likely to ever be the reward-optimal
+  // pick anyway). If nothing simulated clears MIN_SIM_WIN_RATE, fall back to the LOWEST-level
+  // screened group instead — the safest bet available, mirroring what "nearest" used to proxy for.
+  type ScreenedGroup = {
+    group: (typeof easy_enough)[number]
+    mob_group: SimMobGroupMember[]
+    sim: SimBatchResult | null
+  }
   const sim_party = CHARACTERS.map((c) => prep.sim_party_stats.get(c.id)!)
-  const candidates = [...easy_enough].sort((a, b) => distance_of(a) - distance_of(b)).slice(0, SIM_SCREEN_CANDIDATES)
+  const candidates = [...easy_enough].sort((a, b) => avg_level_of(b) - avg_level_of(a)).slice(0, SIM_SCREEN_CANDIDATES)
   const screened: ScreenedGroup[] = candidates.map((group) => {
     const mob_group: SimMobGroupMember[] = group.members.map((m) => ({ mob_type: m.mob_type, level: m.level_scalar }))
     try {
-      return { group, sim: simulate_many(sim_party, mob_group, SIM_SCREEN_RUNS) }
+      return { group, mob_group, sim: simulate_many(sim_party, mob_group, SIM_SCREEN_RUNS) }
     } catch (error) {
       log(`  simulated screening skipped for group #${group.index} (${message_of(error)})`)
-      return { group, sim: null }
+      return { group, mob_group, sim: null }
     }
   })
   const viable = screened.filter((s) => s.sim !== null && s.sim.win_rate >= MIN_SIM_WIN_RATE)
   const picked =
-    viable.length > 0 ? viable.sort((a, b) => fitness_score(b.sim!) - fitness_score(a.sim!))[0]! : screened[0]!
+    viable.length > 0
+      ? viable.sort((a, b) => reward_score(b.sim!, b.mob_group) - reward_score(a.sim!, a.mob_group))[0]!
+      : [...screened].sort((a, b) => avg_level_of(a.group) - avg_level_of(b.group))[0]!
   const target = picked.group
   const mobs = target.members.map((m) => ({ mob_type: m.mob_type, level: m.level_scalar }))
   log(
-    `${viable.length > 0 ? 'best-simulated' : 'nearest suitable (simulation unavailable or nothing met the win-rate bar)'} group #${target.index} (avg lv ${avg_level_of(target).toFixed(1)} vs party avg ${party_avg_level.toFixed(1)}) at (${target.x},${target.z}) — ${mobs.map((m) => `${m.mob_type}(lv${m.level})`).join(', ')}` +
+    `${viable.length > 0 ? 'best-reward-simulated' : 'safest fallback (simulation unavailable or nothing met the win-rate bar)'} group #${target.index} (avg lv ${avg_level_of(target).toFixed(1)} vs party avg ${party_avg_level.toFixed(1)}) at (${target.x},${target.z}) — ${mobs.map((m) => `${m.mob_type}(lv${m.level})`).join(', ')}` +
       (picked.sim
-        ? ` [simulated: ${(picked.sim.win_rate * 100).toFixed(0)}% win, ~${picked.sim.avg_turns.toFixed(0)} turns]`
+        ? ` [simulated: ${(picked.sim.win_rate * 100).toFixed(0)}% win, ~${picked.sim.avg_turns.toFixed(0)} turns, ${picked.sim.avg_xp_per_turn.toFixed(0)} xp/turn]`
         : '')
   )
 
