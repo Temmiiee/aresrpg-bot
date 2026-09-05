@@ -6,7 +6,7 @@
 // loop -> settle & report) purely for readability — each phase runs exactly once, in this exact
 // order, same as when it was one function; nothing here changes what the bot actually does.
 import { living_content } from '@aresrpg/sdk'
-import { world_content_id, world_id as derive_world_id } from '@aresrpg/sdk/seed-ids'
+import { world_content_id, world_id as derive_world_id, zone_id } from '@aresrpg/sdk/seed-ids'
 import { create_fight, type FightCommand, type HydratedFightCheckpoint } from '@aresrpg/fight'
 
 import type { BotSdk } from './sdk_client.ts'
@@ -527,6 +527,22 @@ const find_or_create_fight = async (
   if (remaining_ms > 0) {
     log(`waiting ${(remaining_ms / 1000).toFixed(1)}s for travel time…`)
     await sleep(remaining_ms)
+  }
+
+  // Force a fresh re-fetch of the zone object right before engaging, bypassing hydrate_unknown's
+  // "already known" skip (2026-09-05): search_zone above may have hydrated this SAME id earlier
+  // in this call (its own with_terminal_kiosk hydration runs even on the create-then-collide
+  // attempt, before the fallback refresh_zone bumps the real on-chain version) -- engage() later
+  // reusing that now-stale cached reference is what produced a reproducible
+  // "[sdk] unresolved object ... hydrate it first" failure, confirmed live: the EXACT same
+  // engage() call succeeded every time from a fresh process that never called search_zone first,
+  // and kept failing identically across multiple mob groups/positions in this same zone. sdk.tx
+  // isn't involved here -- this is a pure cache refresh, no transaction, no gas.
+  try {
+    const game_original = bot.sdk.game_type_package
+    if (game_original) await bot.sdk.hydrate([zone_id(world, game_original, zx, zz)])
+  } catch (error) {
+    log(`pre-engage zone cache refresh skipped (${message_of(error)}) — proceeding anyway`)
   }
 
   log(`${LEADER.name} engaging (group-only access)…`)

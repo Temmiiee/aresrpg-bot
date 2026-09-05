@@ -45,16 +45,24 @@ const retry_delay_ms = (error: unknown, message: string): number => {
 const main = async () => {
   clear_log()
   const signer = await get_enoki_signer()
-  const bot = create_bot_sdk(signer)
-  console.log(
-    `session start — address ${bot.address}, up to ${max_fights === Infinity ? 'unlimited' : max_fights} fights`
-  )
+  const address = create_bot_sdk(signer).address
+  console.log(`session start — address ${address}, up to ${max_fights === Infinity ? 'unlimited' : max_fights} fights`)
 
   let position = read_position()
   let count = 0
 
   while (count < max_fights) {
     count += 1
+    // A fresh BotSdk every fight, not one reused for the whole session (2026-09-05): the SDK's
+    // own object-resolution cache accumulates across calls within one instance, and a search_zone
+    // (or its refresh fallback) hydrating an object early in a fight, followed later by that same
+    // object's version changing on-chain, leaves engage()'s later reference to it stale --
+    // surfacing as "[sdk] unresolved object ... hydrate it first", reproducibly, only when
+    // preceded by a search/refresh in the SAME process. Confirmed live: calling fight.engage()
+    // with the EXACT failing parameters from a brand-new process (fresh cache, no preceding
+    // search/refresh) succeeded every time. get_enoki_signer() reuses the cached session file (no
+    // network round-trip), so recreating this per fight costs nothing real.
+    const bot = create_bot_sdk(signer)
     console.log(`\n[${timestamp()}] === fight ${count} ===`)
     write_status(`fight ${count}: starting…`, count)
     try {
