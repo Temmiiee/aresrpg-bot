@@ -597,26 +597,35 @@ const join_and_ready = async (bot: BotSdk, fight_id: string, log: (msg: string) 
   if (leader_idx === undefined) throw new Error('Leader is not seated in this fight — cannot recover automatically')
   const { team } = state_json.fighters[leader_idx]!
 
-  // One transaction for every not-yet-joined character instead of one per character — fewer
-  // transactions means less gas (each has its own fixed computation+storage cost on top of the
-  // marginal join cost).
-  const missing = CHARACTERS.filter((c) => !c.leader && !fighter_indices(state_json).has(c.id))
-  if (missing.length > 0) {
-    log(`${missing.map((c) => c.name).join(', ')} joining (grouped, one transaction)…`)
-    const cap = await kiosk_cap()
-    if (!cap) throw new Error('No personal kiosk found for this account')
-    await submit_with_retry(
-      () =>
-        fight.join_many({
-          fight: fight_id,
-          character_ids: missing.map((c) => c.id),
-          team,
-          party: PARTY_ID ?? undefined,
-          custody: { kiosk: cap.kioskId, kiosk_cap: cap.objectId },
-        }),
-      log
-    )
-    await sleep(1_500)
+  // Placement is a strict on-chain race: combat.move force-starts the fight 60s after engage
+  // (PLACEMENT_FORCE_MS) even with only the leader seated, once anyone readies -- after that,
+  // join_gate's `in_placement` check is permanently false and any join attempt aborts with
+  // ENotPlacement (1706), no matter how many retries. `queue.length > 0` is this file's existing
+  // signal for "already started" (checked below, before readying) -- checking it here too, before
+  // spending a transaction on a join that's guaranteed to abort, turns a hard crash into a
+  // graceful "fight fewer than the full party" instead (2026-09-05, live: a leftover solo fight
+  // from earlier in this session crossed the 60s window before the other three could join).
+  if (state_json.queue.length > 0) {
+    log(`fight already started without the full party seated (placement's 60s window elapsed) — continuing with whoever joined`)
+  } else {
+    const missing = CHARACTERS.filter((c) => !c.leader && !fighter_indices(state_json).has(c.id))
+    if (missing.length > 0) {
+      log(`${missing.map((c) => c.name).join(', ')} joining (grouped, one transaction)…`)
+      const cap = await kiosk_cap()
+      if (!cap) throw new Error('No personal kiosk found for this account')
+      await submit_with_retry(
+        () =>
+          fight.join_many({
+            fight: fight_id,
+            character_ids: missing.map((c) => c.id),
+            team,
+            party: PARTY_ID ?? undefined,
+            custody: { kiosk: cap.kioskId, kiosk_cap: cap.objectId },
+          }),
+        log
+      )
+      await sleep(1_500)
+    }
   }
 
   state_json = await read_fight(sdk, fight_id)
@@ -1198,7 +1207,7 @@ export const run_one_group_fight = async (
     write_hp_state(hp_state)
   }
 
-  log(`fight ended (${won ? 'WON' : 'LOST'}) — settling all 4 characters…`)
+  log(`fight ended (${won ? 'WON' : 'LOST'}) — settling all ${CHARACTERS.length} characters…`)
   const { drops } = await settle_all(bot, fight_id, log)
   write_group_state({})
 
