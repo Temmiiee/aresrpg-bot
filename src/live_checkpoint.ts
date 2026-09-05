@@ -83,16 +83,23 @@ const to_mob_loot = (raw: unknown): MobLoot => {
   }
 }
 
+// pos0 is the fight's combat-relevant mob snapshot (max_hp + 4 resistances) -- it never carried
+// build stats like level/ap/mp/agility/wisdom/kit (those live on the MobTemplate, not read here,
+// same approximate-by-design tradeoff as this file's header comment for players). Defaulting them
+// instead of requiring them is what lets the lookahead rollout run against a live fight at all —
+// confirmed live (2026-09-05): every one of these was undefined on the real pos0 JSON, throwing
+// "expected an integer, got undefined" on every single turn and silently forcing the (still
+// correct, just less accurate) greedy fallback for the whole fight.
 const to_mob_snapshot = (pos0: unknown): MobSnapshot => {
   const p = record(pos0)
   return {
-    mob_type: String(p.mob_type),
-    level: as_bigint(p.level),
+    mob_type: String(p.mob_type ?? ''),
+    level: as_bigint(p.level ?? 1),
     max_hp: as_bigint(p.max_hp),
-    ap: as_bigint(p.ap),
-    mp: as_bigint(p.mp),
-    agility: as_bigint(p.agility),
-    wisdom: as_bigint(p.wisdom),
+    ap: as_bigint(p.ap ?? 6),
+    mp: as_bigint(p.mp ?? 3),
+    agility: as_bigint(p.agility ?? 0),
+    wisdom: as_bigint(p.wisdom ?? 0),
     earth_res: as_bigint(p.earth_res),
     fire_res: as_bigint(p.fire_res),
     water_res: as_bigint(p.water_res),
@@ -203,6 +210,7 @@ export const live_state_to_checkpoint = (
     ended: Boolean(raw.ended),
     winner: raw.winner === null || raw.winner === undefined ? null : as_bigint(raw.winner),
     dungeon: null,
+    dungeon_room: null,
     managed: Boolean(raw.managed),
     wagered: Boolean(raw.wagered),
     drops_rolled: Boolean(raw.drops_rolled),
