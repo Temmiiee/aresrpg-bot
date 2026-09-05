@@ -27,13 +27,13 @@ import type { SimPartyMember } from './simulate.ts'
 
 const SPELLS = all_spell_sources()
 
-const as_bigint = (v: unknown): bigint => {
+const as_bigint = (v: unknown, field = '?'): bigint => {
   if (typeof v === 'bigint') return v
   if (typeof v === 'number') return BigInt(Math.trunc(v))
   if (typeof v === 'string') return BigInt(v)
-  throw new Error(`live_checkpoint: expected an integer, got ${typeof v}`)
+  throw new Error(`live_checkpoint: expected an integer for ${field}, got ${typeof v}`)
 }
-const as_bigint_array = (v: unknown): bigint[] => (Array.isArray(v) ? v.map(as_bigint) : [])
+const as_bigint_array = (v: unknown): bigint[] => (Array.isArray(v) ? v.map((x) => as_bigint(x)) : [])
 const record = (v: unknown): Record<string, unknown> => v as Record<string, unknown>
 
 const to_spell_effect = (raw: unknown): SpellEffect => {
@@ -83,27 +83,29 @@ const to_mob_loot = (raw: unknown): MobLoot => {
   }
 }
 
-// pos0 is the fight's combat-relevant mob snapshot (max_hp + 4 resistances) -- it never carried
-// build stats like level/ap/mp/agility/wisdom/kit (those live on the MobTemplate, not read here,
-// same approximate-by-design tradeoff as this file's header comment for players). Defaulting them
-// instead of requiring them is what lets the lookahead rollout run against a live fight at all —
-// confirmed live (2026-09-05): every one of these was undefined on the real pos0 JSON, throwing
-// "expected an integer, got undefined" on every single turn and silently forcing the (still
-// correct, just less accurate) greedy fallback for the whole fight.
-const to_mob_snapshot = (pos0: unknown): MobSnapshot => {
+// `kind.pos0` only ever carries build/loot data (kit/level/loot/mob_type/xp) -- max_hp, base
+// ap/mp and every resistance live on the FIGHTER's own top-level `stats` object instead (shared
+// shape with player fighters), with full resistance names (earth_resistance, not earth_res).
+// Confirmed live via a raw JSON dump (2026-09-05): reading pos0.max_hp/pos0.earth_res (this file's
+// previous assumption) was always undefined, throwing "expected an integer, got undefined" on
+// every single turn and silently forcing the (still correct, just less accurate) greedy fallback
+// for the whole fight.
+const to_mob_snapshot = (pos0: unknown, stats: unknown, idx: number): MobSnapshot => {
   const p = record(pos0)
+  const s = record(stats)
+  const sheet = record(s.sheet)
   return {
     mob_type: String(p.mob_type ?? ''),
     level: as_bigint(p.level ?? 1),
-    max_hp: as_bigint(p.max_hp),
-    ap: as_bigint(p.ap ?? 6),
-    mp: as_bigint(p.mp ?? 3),
-    agility: as_bigint(p.agility ?? 0),
-    wisdom: as_bigint(p.wisdom ?? 0),
-    earth_res: as_bigint(p.earth_res),
-    fire_res: as_bigint(p.fire_res),
-    water_res: as_bigint(p.water_res),
-    air_res: as_bigint(p.air_res),
+    max_hp: as_bigint(s.max_hp, `fighters[${idx}].stats.max_hp`),
+    ap: as_bigint(s.base_ap ?? 6),
+    mp: as_bigint(s.base_mp ?? 3),
+    agility: as_bigint(sheet.agility ?? 0),
+    wisdom: as_bigint(sheet.wisdom ?? 0),
+    earth_res: as_bigint(s.earth_resistance, `fighters[${idx}].stats.earth_resistance`),
+    fire_res: as_bigint(s.fire_resistance, `fighters[${idx}].stats.fire_resistance`),
+    water_res: as_bigint(s.water_resistance, `fighters[${idx}].stats.water_resistance`),
+    air_res: as_bigint(s.air_resistance, `fighters[${idx}].stats.air_resistance`),
     kit: Array.isArray(p.kit) ? p.kit.map(to_kit_spell) : [],
     xp: as_bigint(p.xp ?? 0),
     loot: Array.isArray(p.loot) ? p.loot.map(to_mob_loot) : [],
@@ -136,11 +138,11 @@ export const live_state_to_checkpoint = (
   const raw_fighters = Array.isArray(raw.fighters) ? raw.fighters : []
   const sources: Record<string, ReturnType<typeof create_character_source>> = {}
 
-  const fighters: Fighter[] = raw_fighters.map((rf) => {
+  const fighters: Fighter[] = raw_fighters.map((rf, idx) => {
     const f = record(rf)
     const kind_raw = record(f.kind)
     const variant = String(kind_raw['@variant'])
-    const hp = as_bigint(f.hp)
+    const hp = as_bigint(f.hp, `fighters[${idx}].hp`)
     if (variant === 'Player') {
       const character = String(kind_raw.character)
       const member = sim_party_stats.get(character)
@@ -158,33 +160,33 @@ export const live_state_to_checkpoint = (
           // weapon/folded_stats omitted on purpose — see file header.
         })
       return {
-        team: as_bigint(f.team),
+        team: as_bigint(f.team, `fighters[${idx}].team`),
         kind: { type: 'player', character, owner: String(kind_raw.owner ?? ''), level: BigInt(member.level) },
-        cell: as_bigint(f.cell),
+        cell: as_bigint(f.cell, `fighters[${idx}].cell`),
         ready: Boolean(f.ready),
         dead: hp <= 0n,
         settled: Boolean(f.settled),
         forfeited: Boolean(f.forfeited),
         hp,
-        ap: as_bigint(f.ap),
-        mp: as_bigint(f.mp),
+        ap: as_bigint(f.ap, `fighters[${idx}].ap`),
+        mp: as_bigint(f.mp, `fighters[${idx}].mp`),
         drops: [],
         effects: [],
         cooldowns: [],
       }
     }
-    const snapshot = to_mob_snapshot(kind_raw.pos0)
+    const snapshot = to_mob_snapshot(kind_raw.pos0, f.stats, idx)
     return {
-      team: as_bigint(f.team),
+      team: as_bigint(f.team, `fighters[${idx}].team`),
       kind: { type: 'mob', snapshot },
-      cell: as_bigint(f.cell),
+      cell: as_bigint(f.cell, `fighters[${idx}].cell`),
       ready: Boolean(f.ready),
       dead: hp <= 0n,
       settled: Boolean(f.settled),
       forfeited: Boolean(f.forfeited),
       hp,
-      ap: as_bigint(f.ap),
-      mp: as_bigint(f.mp),
+      ap: as_bigint(f.ap, `fighters[${idx}].ap`),
+      mp: as_bigint(f.mp, `fighters[${idx}].mp`),
       drops: [],
       effects: [],
       cooldowns: [],

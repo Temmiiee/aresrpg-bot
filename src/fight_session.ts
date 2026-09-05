@@ -89,6 +89,24 @@ const MIN_HP_FRACTION = 0.8
 const STALEMATE_CHECK_INTERVAL = 20 // re-check every 20 turns
 const STALEMATE_HP_FLOOR_FRACTION = 0.02 // must clear at least 2% total enemy HP per interval
 
+// `stats` sits at the TOP LEVEL of every fighter (player and mob alike) -- NOT nested under
+// `kind.pos0` as this type assumed until 2026-09-05. Confirmed live via a raw JSON dump: a mob's
+// `kind.pos0` only ever carried build/loot data (kit/level/loot/mob_type/xp), never max_hp or any
+// resistance; those, plus base_ap/base_mp and the stat sheet, live in this shared `stats` object,
+// with full resistance names (earth_resistance, not earth_res). Reading pos0.max_hp/pos0.earth_res
+// (the old code) silently produced NaN in finish_bonus/element_bonus for every live fight, ever
+// since those were written -- no crash, just corrupted candidate scores nobody noticed because
+// NaN-tainted comparisons just fall through to something else looking equally arbitrary.
+export type FighterStatsJson = {
+  max_hp: string | number
+  base_ap: string | number
+  base_mp: string | number
+  earth_resistance: string | number
+  fire_resistance: string | number
+  water_resistance: string | number
+  air_resistance: string | number
+  sheet: { agility: string | number; wisdom: string | number }
+}
 export type FighterJson = {
   team: number
   cell: string | number
@@ -97,16 +115,14 @@ export type FighterJson = {
   ap: string | number
   ready: boolean
   settled: boolean
+  stats?: FighterStatsJson
   kind: {
     '@variant': string
     character?: string
     pos0?: {
-      max_hp: string | number
-      earth_res: string | number
-      fire_res: string | number
-      water_res: string | number
-      air_res: string | number
+      level?: string | number
       mob_type?: string
+      xp?: string | number
       loot?: { item_type: string }[]
     }
   }
@@ -702,18 +718,18 @@ const decide_and_commit_turn = async (
     caster_stats ? caster_damage_multiplier(element, caster_stats) : 1
   const priority_weight = (rank: number) => 1 / (rank + 1) ** DECISION_POLICY.priority_decay
   const finish_bonus = (enemy: (typeof enemies_by_priority)[number]): number => {
-    const enemy_max_hp = enemy.kind.pos0 ? as_number(enemy.kind.pos0.max_hp) : as_number(enemy.hp)
+    const enemy_max_hp = enemy.stats ? as_number(enemy.stats.max_hp) : as_number(enemy.hp)
     return DECISION_POLICY.finish_weight * (1 - as_number(enemy.hp) / Math.max(1, enemy_max_hp))
   }
-  const RESISTANCE_FIELD: Readonly<Record<string, 'earth_res' | 'fire_res' | 'water_res' | 'air_res'>> = {
-    earth: 'earth_res',
-    fire: 'fire_res',
-    water: 'water_res',
-    air: 'air_res',
+  const RESISTANCE_FIELD: Readonly<Record<string, keyof FighterStatsJson>> = {
+    earth: 'earth_resistance',
+    fire: 'fire_resistance',
+    water: 'water_resistance',
+    air: 'air_resistance',
   }
   const element_bonus = (enemy: (typeof enemies_by_priority)[number], element: string | null): number => {
     const field = element ? RESISTANCE_FIELD[element] : undefined
-    const raw = field && enemy.kind.pos0 ? as_number(enemy.kind.pos0[field]) : null
+    const raw = field && enemy.stats ? as_number(enemy.stats[field] as string | number) : null
     return DECISION_POLICY.element_weight * element_advantage(raw)
   }
   const build_candidates = (): Candidate[] => {
