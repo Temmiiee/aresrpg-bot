@@ -386,10 +386,24 @@ const find_or_create_fight = async (
   }
 
   log(`searching zone (${zx},${zz}) at (${position.x},${position.z})…`)
-  await submit_with_retry(
-    () => character.search_zone({ character_id: LEADER.id, world: WORLD, x: position.x, z: position.z }),
-    log
-  )
+  // search_zone's `refresh` isn't optional (character_actions.ts: false for first discovery,
+  // true once the derived Zone object already exists) -- there's no local record of which
+  // zones this account has already discovered, so try a fresh discovery first and fall back to
+  // refresh only on the specific "already exists" collision. This dry-run-rejects-before-
+  // submitting (the SDK's own "NOT submitted" wording), so the fallback costs no extra gas.
+  try {
+    await submit_with_retry(
+      () => character.search_zone({ character_id: LEADER.id, world: WORLD, x: position.x, z: position.z, refresh: false }),
+      log
+    )
+  } catch (error) {
+    if (!/EObjectAlreadyExists|derived_object::claim/i.test(message_of(error))) throw error
+    log('zone already discovered — refreshing instead…')
+    await submit_with_retry(
+      () => character.search_zone({ character_id: LEADER.id, world: WORLD, x: position.x, z: position.z, refresh: true }),
+      log
+    )
+  }
   const checkpoint_at = Date.now()
 
   const groups = await read_mob_groups(sdk, world, world_content, zx, zz)
@@ -539,7 +553,7 @@ const join_and_ready = async (bot: BotSdk, fight_id: string, log: (msg: string) 
           fight: fight_id,
           character_ids: missing.map((c) => c.id),
           team,
-          party: PARTY_ID,
+          party: PARTY_ID ?? undefined,
           custody: { kiosk: cap.kioskId, kiosk_cap: cap.objectId },
         }),
       log

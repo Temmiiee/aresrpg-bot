@@ -1,12 +1,16 @@
 // The one place the party roster lives — shared by the single-fight and session CLIs.
 export const WORLD = 'nauvis'
-// TODO(2026-09-05): also stale from the same redeploy that orphaned CHARACTERS below (see that
-// comment) -- this is the OLD party's id, from before the reset. fight_session.ts's join_many
-// call (the only real usage, see party.ts's PartyActions for how a Party is created/joined)
-// will fail until this points at a real Party object containing the 4 new characters below.
-// Group grandoulfe/perefouras/yoasobi/asobienne into a party in-game (or via the SDK's
-// party_actions invite/accept flow) and put that Party object's id here.
-export const PARTY_ID = '0xa02fd2bf0eb3813b9b4ed4c0177cec666d06689d7dd286ea7bfb270bca4c5e8c' // STALE — see TODO above
+// TODO(2026-09-05): null until the 4 characters below are grouped into a party in-game (this
+// bot never drives party creation itself -- see party.ts's PartyActions, which needs a
+// CharacterRow/PartyRow only the real game client's indexer-backed session can produce).
+// null (not a stale id) is deliberate: fight_session.ts's join_many call only takes the
+// grouped-join path when this is truthy, so leaving it null correctly falls back to joining
+// each character individually instead of feeding a dead Party object into the transaction --
+// the exact bug that produced an ArityMismatch abort once the old id was pointed at an object
+// under the previous (redeployed-away) game package. Fill this in with the real Party object id
+// once grandoulfe/perefouras/yoasobi/asobienne are grouped -- no other code change needed, the
+// grouped-join path picks it up automatically.
+export const PARTY_ID: string | null = null
 
 // Replaced 2026-09-05: the testnet was fully redeployed (new game_type_package, not an upgrade
 // -- see docs/ROADMAP.md), which orphaned every character ID from the previous deployment.
