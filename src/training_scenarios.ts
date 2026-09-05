@@ -22,24 +22,52 @@ export const make_rng = (seed: number) => {
 }
 const pick = <T>(rng: () => number, items: readonly T[]): T => items[Math.floor(rng() * items.length)]!
 const int_between = (rng: () => number, low: number, high: number): number => low + Math.floor(rng() * (high - low + 1))
+const pick_distinct = <T>(rng: () => number, items: readonly T[], count: number): T[] => {
+  const pool = [...items]
+  const picked: T[] = []
+  for (let i = 0; i < count && pool.length > 0; i += 1) {
+    const idx = Math.floor(rng() * pool.length)
+    picked.push(pool[idx]!)
+    pool.splice(idx, 1)
+  }
+  return picked
+}
 
 // The starter-zone families — everything a party in roughly the 1-30 level band would actually
-// encounter. Excludes the much-higher-level protector_* mining line so random rolls don't
-// generate absurd mismatches no early party would ever face.
-const STARTER_FAMILIES = ['ant', 'aragne', 'crab', 'crowani', 'fuwa', 'misui', 'moka']
+// encounter. Excludes the much-higher-level protector_* mining line (now split into 3 separate
+// families -- protector_bricheton/gaia/miner, level 1-110 each -- still excluded for the same
+// reason) so random rolls don't generate absurd mismatches no early party would ever face.
+// boar/bramble/lorito/nook/tinker added 2026-09-04 after a game content update introduced them,
+// all confirmed level 1-25 -- same tier as the families already here.
+const STARTER_FAMILIES = ['ant', 'aragne', 'boar', 'bramble', 'crab', 'crowani', 'fuwa', 'lorito', 'misui', 'moka', 'nook', 'tinker']
 const ALL_MOB_ROWS = all_mob_rows()
 const STARTER_MOBS = ALL_MOB_ROWS.filter((m) => STARTER_FAMILIES.includes(m.family))
 
-const CLASSES = ['senshi', 'yajin', 'tomoda', 'mori'] as const
+// All 12 real classes (2026-09-04, widened from a hardcoded 4 that happened to match this bot's
+// own party_config.ts) -- widening this only became safe once stat_allocation.ts's
+// PRIMARY_STAT_BY_CLASS covered all 12 too; before that fix, the other 8 would have simulated
+// with every point dumped into vitality and zero caster_damage_multiplier bonus regardless of
+// their spells' real quality, which would have handicapped them unfairly in any comparison.
+export const CLASSES = ['asobi', 'ikari', 'iyashi', 'mori', 'rojin', 'senshi', 'shugo', 'shusen', 'tokei', 'tomoda', 'yajin', 'yogan'] as const
 const NAMES = ['p1', 'p2', 'p3', 'p4']
 
-/** A random 4-character party at a random level in [min_level, max_level], stats built the same
- *  way the live bot actually builds them (split_stat_spending from level 1) — so the policy
- *  trains against realistic characters, not hand-picked stat blocks. */
-export const random_party = (rng: () => number, min_level = 3, max_level = 15): SimPartyMember[] => {
-  const level = int_between(rng, min_level, max_level)
+// 25% duplicate-class parties (2026-09-04, ported from the sibling AresRPG-RL repo's
+// rl/scenarios.py, which hit and fixed this same gap first): a real player's party can be
+// uneven (2x the same class, etc), not just 4 distinct classes -- confirmed as a real,
+// likely contributor to a held-out validation failure (2026-09-03/04: +14.24 training-set
+// improvement, -7.69 held-out) back when CLASSES was just the fixed 4-class roster and "4
+// distinct classes" meant literally always the same lineup. With 12 classes now, "distinct"
+// alone already gives real variety (495 possible 4-class combos) -- duplicates on top of that
+// still matter for covering uneven real comps, just less critically than before.
+const DUPLICATE_CLASS_PROB = 0.25
+
+/** Builds a party from an EXPLICIT list of classes (order = slot) at a given level, stats spent
+ *  the same way the live bot actually spends them (split_stat_spending from level 1) — the
+ *  shared stat-building step behind both random_party below and cli_compositions.ts's sweep,
+ *  which needs specific compositions, not random ones. */
+export const build_party = (classes: readonly string[], level: number): SimPartyMember[] => {
   const total_points = Math.max(0, (level - 1) * 5)
-  return CLASSES.map((classe, i) => {
+  return classes.map((classe, i) => {
     const primary_field = PRIMARY_STAT_BY_CLASS[classe]
     const spending = split_stat_spending(classe, total_points, 0)
     const primary_value = (primary_field && spending[primary_field]) ?? 0
@@ -55,6 +83,16 @@ export const random_party = (rng: () => number, min_level = 3, max_level = 15): 
       agility: primary_field === 'agility' ? primary_value : 0,
     }
   })
+}
+
+/** A random 4-character party at a random level in [min_level, max_level]. Class assignment is 4
+ *  distinct classes sampled from all 12 (no repeats) 75% of the time, and 4 independent random
+ *  draws (duplicates allowed) the other 25% -- see DUPLICATE_CLASS_PROB above. */
+export const random_party = (rng: () => number, min_level = 3, max_level = 15): SimPartyMember[] => {
+  const level = int_between(rng, min_level, max_level)
+  const party_classes =
+    rng() < DUPLICATE_CLASS_PROB ? Array.from({ length: 4 }, () => pick(rng, CLASSES)) : pick_distinct(rng, CLASSES, 4)
+  return build_party(party_classes, level)
 }
 
 // mob_scalar_for_level CLAMPS a requested level into [level_min, level_max] — so a mob whose
@@ -112,7 +150,7 @@ const CONTESTED_MAX_WIN_RATE = 0.9
  *  nothing to the search — verified this was happening (2026-09-01: 5 of 8 raw-random scenarios
  *  were 0% or 100% regardless of policy, and training flat-lined for 5 straight generations
  *  because of it). Costs real simulation time up front but only once per scenario set. */
-const calibrate_group = (
+export const calibrate_group = (
   rng: () => number,
   party: readonly SimPartyMember[],
   initial_group: readonly SimMobGroupMember[]

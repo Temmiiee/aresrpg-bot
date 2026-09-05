@@ -135,6 +135,15 @@ export const decide_turn = (
       if (s.role !== 'support') continue
       const target = s.is_heal ? heal_target_cell : my_cell
       if (target === null) continue
+      // Heal score scales WITH heal_deficit entirely (2026-09-03, project owner): the old
+      // `base_weight*s.score + heal_weight*deficit` gave a heal candidate a full,
+      // undiminished base_weight*s.score value even at the smallest possible deficit (just
+      // under HEAL_THRESHOLD), so a barely-scratched ally scored almost as well as a
+      // near-dead one — not as broken as scoring a full-health target (that candidate
+      // never even exists, target stays null above), but still not scaling urgency the way
+      // finish_bonus already does for damage. Multiplying by deficit fixes both terms at
+      // once, matching that same design.
+      const heal_score = s.is_heal ? (policy.base_weight * s.score + policy.heal_weight) * heal_deficit : policy.base_weight * s.score
       list.push({
         kind: 'cast',
         spell: s.name,
@@ -143,7 +152,7 @@ export const decide_turn = (
         los: s.line_of_sight,
         ap_cost: s.ap_cost,
         target_cell: target,
-        score: policy.base_weight * s.score + (s.is_heal ? policy.heal_weight * heal_deficit : 0),
+        score: heal_score,
       })
     }
     enemies_by_priority.forEach((enemy, rank) => {

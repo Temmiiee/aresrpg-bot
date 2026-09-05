@@ -44,7 +44,9 @@ export type SimOutcome = {
 
 const SPELLS = all_spell_sources()
 
-const build_setup = (party: readonly SimPartyMember[], mob_group: readonly SimMobGroupMember[]) => {
+// Exported so record_replay.ts (cli_record_replay.ts's fight-visualization recorder) can build
+// the exact same players/mobs/characters shape without duplicating this logic.
+export const build_setup = (party: readonly SimPartyMember[], mob_group: readonly SimMobGroupMember[]) => {
   const characters = party.map((member, index) => {
     const source = create_character_source({
       name: member.name,

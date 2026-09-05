@@ -8,13 +8,30 @@
 import { characteristic_cost_step, type CharacteristicName, type ClassName } from '@aresrpg/immutable'
 
 // The element with the highest total damage-weighted magnitude across each class's spell kit
-// (computed from seed/content/spells.json — see the bot README for the raw numbers). All three
-// earth-leaning classes share strength; tomoda leans fire and wants intelligence instead.
+// (computed from seed/content/spells.json: sum (value+value_max)/2 of every direct-damage
+// effect across each class's full spell list, grouped by the effect's element, take the
+// element with the largest total). Extended to all 12 classes (2026-09-04, previously only
+// covered the 4 in this bot's own party_config.ts) — the other 8 fell back to
+// split_stat_spending's `{vitality: available_points}` default, meaning any composition
+// simulation involving them would have spent every point on vitality and NEVER gained the
+// caster_damage_multiplier bonus below, an unfair handicap that would have skewed a
+// composition sweep against them regardless of how good their spells actually are.
+//
+// Recomputing this same methodology against the real data ALSO caught a pre-existing error:
+// `mori`'s spell kit is air-dominant (46 vs earth's 30), not earth -- corrected strength -> agility.
 export const PRIMARY_STAT_BY_CLASS: Readonly<Record<string, CharacteristicName>> = {
+  asobi: 'strength',
+  ikari: 'strength',
+  iyashi: 'strength',
+  mori: 'agility', // was 'strength' -- air (46) beats earth (30) in the class's actual spell kit
+  rojin: 'chance',
   senshi: 'strength',
-  yajin: 'strength',
+  shugo: 'intelligence',
+  shusen: 'agility',
+  tokei: 'strength',
   tomoda: 'intelligence',
-  mori: 'strength',
+  yajin: 'strength',
+  yogan: 'intelligence',
 }
 
 export type LiveStats = Readonly<{ strength: number; intelligence: number; chance: number; agility: number }>

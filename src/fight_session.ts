@@ -422,7 +422,17 @@ const find_or_create_fight = async (
     sim: SimBatchResult | null
   }
   const sim_party = CHARACTERS.map((c) => prep.sim_party_stats.get(c.id)!)
-  const candidates = [...easy_enough].sort((a, b) => avg_level_of(b) - avg_level_of(a)).slice(0, SIM_SCREEN_CANDIDATES)
+  // Reserve one slot for the single EASIEST group in reach, always -- the rest of the budget
+  // still goes to the hardest ones (comment above). Without this, the "fall back to the safest
+  // simulated group" below (when nothing clears MIN_SIM_WIN_RATE) can only ever fall back to the
+  // safest of the SAME hardest-first slice, never anything genuinely easy that just didn't make
+  // the cut -- confirmed happening for a fresh level-1 party (2026-09-04): MAX_LEVEL_MARGIN=8
+  // let mobs up to level 9 into `easy_enough`, all 10 simulated candidates were drawn from the
+  // hard end of that range, none cleared 60%, and the "safest" fallback was still one of those
+  // 10 -- never an easier group sitting right there in the same zone.
+  const hardest_first = [...easy_enough].sort((a, b) => avg_level_of(b) - avg_level_of(a))
+  const easiest = [...easy_enough].sort((a, b) => avg_level_of(a) - avg_level_of(b))[0]!
+  const candidates = [easiest, ...hardest_first.filter((g) => g !== easiest)].slice(0, SIM_SCREEN_CANDIDATES)
   const screened: ScreenedGroup[] = candidates.map((group) => {
     const mob_group: SimMobGroupMember[] = group.members.map((m) => ({ mob_type: m.mob_type, level: m.level_scalar }))
     try {
@@ -433,10 +443,19 @@ const find_or_create_fight = async (
     }
   })
   const viable = screened.filter((s) => s.sim !== null && s.sim.win_rate >= MIN_SIM_WIN_RATE)
-  const picked =
-    viable.length > 0
-      ? viable.sort((a, b) => reward_score(b.sim!, b.mob_group) - reward_score(a.sim!, a.mob_group))[0]!
-      : [...screened].sort((a, b) => avg_level_of(a.group) - avg_level_of(b.group))[0]!
+  // "Always winnable" is meant to be non-negotiable (MIN_SIM_WIN_RATE's own comment) -- refuse to
+  // engage rather than force the least-bad simulated option when NOTHING clears the bar, instead
+  // of the old unconditional fallback. Confirmed a real problem for a fresh level-1 party
+  // (2026-09-04): every simulated candidate came back well under 60%, and the bot fought the
+  // "safest of a bad lot" anyway, repeatedly, rather than waiting for a better zone -- burning
+  // gas on fights that were never winnable, exactly what MIN_SIM_WIN_RATE exists to prevent.
+  if (viable.length === 0) {
+    const safest = [...screened].sort((a, b) => avg_level_of(a.group) - avg_level_of(b.group))[0]!
+    throw new Error(
+      `Nothing in this zone clears the ${(MIN_SIM_WIN_RATE * 100).toFixed(0)}% win-rate floor (best simulated: group #${safest.group.index} at ${safest.sim ? (safest.sim.win_rate * 100).toFixed(0) : '?'}%) -- refusing to force a losing fight`
+    )
+  }
+  const picked = viable.sort((a, b) => reward_score(b.sim!, b.mob_group) - reward_score(a.sim!, a.mob_group))[0]!
   const target = picked.group
   const mobs = target.members.map((m) => ({ mob_type: m.mob_type, level: m.level_scalar }))
   log(
@@ -473,6 +492,18 @@ const find_or_create_fight = async (
   } catch (error) {
     if (/abort code:\s*1702\b/i.test(message_of(error))) {
       log(`group #${target.index} despawned or was engaged by another player (abort code 1702) — re-searching zone…`)
+      await sleep(3_000)
+      return { kind: 'retried', outcome: await run_one_group_fight(bot, position, log) }
+    }
+    // EWrongMob (fight.move) -- add_mob rebuilds its pending queue from the zone's on-chain
+    // state fresh at execution time, not from what we read minutes ago while simulating/waiting
+    // out travel time; if the zone's seed got rerolled in between (another character's search
+    // landing after this zone's TTL expired), group #target.index can have a different
+    // size/type/order by the time this transaction actually executes. Same class of race as
+    // 1702 above (stale client read vs. authoritative on-chain state at execution), just a
+    // different failure shape -- same recovery.
+    if (/abort code:\s*1703\b/i.test(message_of(error))) {
+      log(`group #${target.index}'s composition changed under us (abort code 1703, likely a zone reseed) — re-searching zone…`)
       await sleep(3_000)
       return { kind: 'retried', outcome: await run_one_group_fight(bot, position, log) }
     }

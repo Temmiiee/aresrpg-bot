@@ -34,6 +34,9 @@ const describe_mobs = (mobs: readonly { mob_type: string; level: number }[]) =>
 
 const retry_delay_ms = (error: unknown, message: string): number => {
   if (/No group in this zone is within reach/.test(message)) return NO_TARGET_RETRY_DELAY_MS
+  // Same reasoning as the case above -- zones only reroll every 2h, so a zone with nothing
+  // winnable right now won't have anything different in 30s either.
+  if (/clears the .*% win-rate floor/.test(message)) return NO_TARGET_RETRY_DELAY_MS
   if (is_insufficient_balance(error))
     return Math.max(INSUFFICIENT_BALANCE_MIN_RETRY_DELAY_MS, faucet_cooldown_remaining_ms())
   return RETRY_DELAY_MS
