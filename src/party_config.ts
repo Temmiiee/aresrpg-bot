@@ -1,30 +1,42 @@
 // The one place the party roster lives — shared by the single-fight and session CLIs.
 export const WORLD = 'nauvis'
-export const PARTY_ID = '0xa02fd2bf0eb3813b9b4ed4c0177cec666d06689d7dd286ea7bfb270bca4c5e8c'
+// TODO(2026-09-05): also stale from the same redeploy that orphaned CHARACTERS below (see that
+// comment) -- this is the OLD party's id, from before the reset. fight_session.ts's join_many
+// call (the only real usage, see party.ts's PartyActions for how a Party is created/joined)
+// will fail until this points at a real Party object containing the 4 new characters below.
+// Group grandoulfe/perefouras/yoasobi/asobienne into a party in-game (or via the SDK's
+// party_actions invite/accept flow) and put that Party object's id here.
+export const PARTY_ID = '0xa02fd2bf0eb3813b9b4ed4c0177cec666d06689d7dd286ea7bfb270bca4c5e8c' // STALE — see TODO above
 
+// Replaced 2026-09-05: the testnet was fully redeployed (new game_type_package, not an upgrade
+// -- see docs/ROADMAP.md), which orphaned every character ID from the previous deployment.
+// These are the real, currently-owned characters under the CURRENT package (confirmed via a
+// direct kiosk read -- the old IDs' objects still physically exist on chain but under an
+// incompatible package type, which is exactly what produced the
+// `dynamic_field::borrow_child_object_mut` abort on every real transaction).
 export const CHARACTERS = [
   {
-    name: 'temmiie',
-    id: '0x033c17f5da068f2f20bd428dd53382212b01f78583d1a944a48b70b951f267c1',
-    classe: 'senshi',
+    name: 'grandoulfe',
+    id: '0x2770b7442bb6ca564ad0d9de64c2a558280909ce74d6327f1b09eb9f35b626a4',
+    classe: 'mori',
     leader: true,
   },
   {
-    name: 'norman',
-    id: '0xce9fa15af7de9c003ed6601d296022262923dffc053991fa7bf4ce7acb472643',
-    classe: 'yajin',
-    leader: false,
-  },
-  {
-    name: 'sasha',
-    id: '0x5ba547ea6b943fb06bc399bbe3360ee01ec2dbe7ecf48bea023306a70d022964',
-    classe: 'tomoda',
-    leader: false,
-  },
-  {
     name: 'perefouras',
-    id: '0x462a4f877cd4a29521fbfb0f9d5a1f72d17e70853951794dcaf8a3f40dfb895f',
+    id: '0x3a81f3673b049cb79608fea891127ff089dbdfb60e2c04479c91bbb176369dc6',
     classe: 'mori',
+    leader: false,
+  },
+  {
+    name: 'yoasobi',
+    id: '0x3330e3bac447a344adeb7b82cdd105b3ee6e33c11feef79da6fcfcb6ad8609fe',
+    classe: 'asobi',
+    leader: false,
+  },
+  {
+    name: 'asobienne',
+    id: '0x11871cbf71fd5aec58f2e150dc4e1bed2c579b4b0265209982db82fd59b8ea14',
+    classe: 'asobi',
     leader: false,
   },
 ] as const
