@@ -1,16 +1,12 @@
 // The one place the party roster lives — shared by the single-fight and session CLIs.
 export const WORLD = 'nauvis'
-// TODO(2026-09-05): null until the 4 characters below are grouped into a party in-game (this
-// bot never drives party creation itself -- see party.ts's PartyActions, which needs a
-// CharacterRow/PartyRow only the real game client's indexer-backed session can produce).
-// null (not a stale id) is deliberate: fight_session.ts's join_many call only takes the
-// grouped-join path when this is truthy, so leaving it null correctly falls back to joining
-// each character individually instead of feeding a dead Party object into the transaction --
-// the exact bug that produced an ArityMismatch abort once the old id was pointed at an object
-// under the previous (redeployed-away) game package. Fill this in with the real Party object id
-// once grandoulfe/perefouras/yoasobi/asobienne are grouped -- no other code change needed, the
-// grouped-join path picks it up automatically.
-export const PARTY_ID: string | null = null
+// Filled in 2026-09-05: the real Party object, grouped in-game and confirmed via a direct chain
+// read (type `::party::Party`, `members` contains exactly these 4 character ids). Finding this
+// couldn't be done from bot code alone (party.move's on-chain state only records a boolean
+// "already in some party" per character, not which one -- no queryable character->party
+// mapping, no creation event either) -- found by hand via a block explorer, tracing the
+// transaction that accepted asobienne's invitation.
+export const PARTY_ID: string | null = '0x844a2f8605ce805c8c3ddd73168b62cf69252386666b4986907f193b993b6a64'
 
 // Replaced 2026-09-05: the testnet was fully redeployed (new game_type_package, not an upgrade
 // -- see docs/ROADMAP.md), which orphaned every character ID from the previous deployment.
@@ -18,6 +14,14 @@ export const PARTY_ID: string | null = null
 // direct kiosk read -- the old IDs' objects still physically exist on chain but under an
 // incompatible package type, which is exactly what produced the
 // `dynamic_field::borrow_child_object_mut` abort on every real transaction).
+// `leader` here is this BOT's own internal convention (whichever character search_zone/engage
+// act as, and whoever join_and_ready expects to already be seated to anchor team assignment) --
+// it does NOT need to match the real Party's on-chain leader (members[0], confirmed asobienne)
+// for fights to work; nothing in fight.move gates search/engage on being the party leader.
+// Deliberately NOT switched to asobienne (2026-09-05): grandoulfe is the one actually seated in
+// the fight currently in progress (created before the real Party was found), and
+// join_and_ready throws "Leader is not seated in this fight" unless CHARACTERS' leader matches
+// whoever is actually anchoring that fight -- changing this now would break resuming it.
 export const CHARACTERS = [
   {
     name: 'grandoulfe',
