@@ -23,6 +23,7 @@ import { read_status } from './status_state.ts'
 import { read_position } from './position_state.ts'
 import { read_group_state } from './group_state.ts'
 import { build_live_fight_snapshot } from './live_fight_snapshot.ts'
+import { normalize_fight_json } from './fight_session.ts'
 import { CHARACTERS } from './party_config.ts'
 import type { SimPartyMember } from './simulate.ts'
 import { LOGIN_PAGE, APP_PAGE } from './control_panel_pages.ts'
@@ -203,8 +204,13 @@ Bun.serve({
       if (!fight_id) return json({ active: false })
       try {
         const { objects } = await bot.sdk.sui_client.core.getObjects({ objectIds: [fight_id], include: { json: true } })
-        const raw = objects[0]?.json
-        if (!raw) return json({ active: false }) // fight concluded and was cleaned up
+        const raw_json = objects[0]?.json
+        if (!raw_json) return json({ active: false }) // fight concluded and was cleaned up
+        // Fight.move's rewrite nested fighters/board/etc under `combat` and moved character
+        // ownership into a parallel `authorities` array -- normalize_fight_json (fight_session.ts)
+        // is the one place that already knows how to flatten this back to the shape
+        // live_state_to_checkpoint expects.
+        const raw = normalize_fight_json(raw_json as never)
         const sim_party_stats = new Map<string, SimPartyMember>(
           await Promise.all(
             CHARACTERS.map(async (c): Promise<[string, SimPartyMember]> => {

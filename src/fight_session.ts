@@ -89,7 +89,7 @@ const MIN_HP_FRACTION = 0.8
 const STALEMATE_CHECK_INTERVAL = 20 // re-check every 20 turns
 const STALEMATE_HP_FLOOR_FRACTION = 0.02 // must clear at least 2% total enemy HP per interval
 
-type FighterJson = {
+export type FighterJson = {
   team: number
   cell: string | number
   hp: string | number
@@ -114,7 +114,7 @@ type FighterJson = {
 // A guess (weapon stats aren't read) used only to budget the local multi-action loop below —
 // if it's wrong the chain simply rejects that step, same as any other candidate miss.
 const ASSUMED_STRIKE_AP_COST = 4
-type FightJson = {
+export type FightJson = {
   fighters: FighterJson[]
   queue: (string | number)[]
   turn_ptr: string | number
@@ -126,6 +126,48 @@ type FightJson = {
   closed: (string | number)[]
   board: { obstacles: (string | number)[] }
 }
+
+// The live Fight object's REAL on-chain shape (2026-09-05, after the fight.move rewrite):
+// fighters/board/closed/ended/queue/round/winner/turn_seed/turn_started_ms all moved under a
+// nested `combat` object instead of sitting at the top level, `turn_ptr` was renamed
+// `turn_pointer`, and each fighter's `kind` no longer carries `character`/`owner` inline for
+// players -- that now lives in a PARALLEL top-level `authorities` array, matched by the same
+// index as `combat.fighters`. Every caller in this file (and live_checkpoint.ts, which receives
+// whatever read_fight returns) was written against the OLD flat shape, so this normalizes at
+// the one boundary where raw chain JSON enters the system instead of touching every call site --
+// confirmed live: a real fight's raw JSON has zero top-level `fighters`, crashing
+// `fighter_indices` with "undefined is not an object (evaluating 'fight.fighters.forEach')".
+type RawAuthority = { '@variant': string; character?: string; owner?: string }
+type RawFightJson = {
+  x: number
+  z: number
+  authorities?: RawAuthority[]
+  combat: {
+    fighters: FighterJson[]
+    board: { obstacles: (string | number)[] }
+    closed: (string | number)[]
+    ended: boolean
+    winner: number | null
+    queue: (string | number)[]
+    turn_pointer: string | number
+    turn_started_ms: string | number
+  }
+}
+export const normalize_fight_json = (raw: RawFightJson): FightJson => ({
+  x: raw.x,
+  z: raw.z,
+  ended: raw.combat.ended,
+  winner: raw.combat.winner,
+  queue: raw.combat.queue,
+  turn_ptr: raw.combat.turn_pointer,
+  turn_started_ms: raw.combat.turn_started_ms,
+  closed: raw.combat.closed,
+  board: raw.combat.board,
+  fighters: raw.combat.fighters.map((f, idx) => {
+    const authority = raw.authorities?.[idx]
+    return authority?.character ? { ...f, kind: { ...f.kind, character: authority.character } } : f
+  }),
+})
 
 const as_number = (v: string | number): number => (typeof v === 'number' ? v : Number(v))
 
@@ -142,7 +184,7 @@ const read_fight = async (sdk: BotSdk['sdk'], fight_id: string): Promise<FightJs
   for (let attempt = 0; ; attempt += 1) {
     const { objects } = await sdk.sui_client.core.getObjects({ objectIds: [fight_id], include: { json: true } })
     const json = objects[0]?.json
-    if (json) return json as unknown as FightJson
+    if (json) return normalize_fight_json(json as unknown as RawFightJson)
     const delay = PROPAGATION_RETRY_DELAYS_MS[attempt]
     if (delay === undefined)
       throw new FightNotFoundError(`Fight object ${fight_id} not found after propagation retries`)
