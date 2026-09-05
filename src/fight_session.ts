@@ -1078,51 +1078,79 @@ const possible_loot_item_types = (state_json: FightJson): Set<string> => {
   return item_types
 }
 
+// fight.settle() batches every fighter's settlement into ONE transaction (settlements: [{
+// fighter_idx, loot }]) -- it does NOT take a single flat {fighter_idx, loot} (confirmed live
+// 2026-09-05: the old one-call-per-character shape threw "undefined is not an object (evaluating
+// 'settlements.length')" for every character, every time). All 4 characters share one personal
+// kiosk (party_config.ts), so one kiosk_cap can authorize settling all of them together -- same
+// batching win as join_many.
 const settle_all = async (
   bot: BotSdk,
   fight_id: string,
   log: (msg: string) => void
 ): Promise<{ drops: Record<string, number> }> => {
-  const { sdk, fight } = bot
-  let all_settled = true
+  const { sdk, fight, kiosk_cap } = bot
   const drops: Record<string, number> = {}
 
-  for (const c of CHARACTERS) {
-    let state_json = await read_fight(sdk, fight_id).catch((error: unknown) => {
-      log(`settle: couldn't re-read fight state (${message_of(error)}) — treating as already concluded`)
-      return null
-    })
-    if (!state_json) break
+  const state_json = await read_fight(sdk, fight_id).catch((error: unknown) => {
+    log(`settle: couldn't re-read fight state (${message_of(error)}) — treating as already concluded`)
+    return null
+  })
+  if (!state_json) return { drops }
 
-    const idx = fighter_indices(state_json).get(c.id)
-    if (idx === undefined || state_json.fighters[idx]!.settled) continue
-    log(`settling ${c.name}…`)
-    // Best-effort reporting only (this character's pre-roll snapshot, possibly empty/stale —
-    // see possible_loot_item_types' header comment) — never what gets sent to settle() itself.
+  const indices = fighter_indices(state_json)
+  const unsettled = CHARACTERS.filter((c) => {
+    const idx = indices.get(c.id)
+    return idx !== undefined && !state_json.fighters[idx]!.settled
+  })
+  if (unsettled.length === 0) return { drops }
+
+  // Best-effort reporting only (each character's pre-roll snapshot, possibly empty/stale — see
+  // possible_loot_item_types' header comment) — never what gets sent to settle() itself.
+  for (const c of unsettled) {
+    const idx = indices.get(c.id)!
     const raw_drops = ((state_json.fighters[idx] as unknown as { drops?: RawDrop[] })?.drops ?? []) as RawDrop[]
     for (const d of raw_drops) {
       const item_type = drop_item_type(d)
       const qty = typeof d === 'object' && typeof d.qty === 'number' ? d.qty : 1
       if (item_type) drops[item_type] = (drops[item_type] ?? 0) + qty
     }
-    const loot = [...possible_loot_item_types(state_json)].map((item_type) => ({ item_type, existing: null }))
-    try {
-      await submit_with_retry(() => fight.settle({ fight: fight_id, fighter_idx: BigInt(idx), loot }), log)
-    } catch (error) {
-      log(`settle threw, re-checking on-chain state: ${message_of(error)}`)
-      state_json = await read_fight(sdk, fight_id).catch((reread_error: unknown) => {
-        log(`settle: re-read after failure also failed (${message_of(reread_error)}) — assuming settled`)
-        return null
-      })
-      const now_settled = state_json ? state_json.fighters[idx]?.settled : true
-      if (!now_settled) {
-        all_settled = false
-        log(`  ${c.name} is NOT settled — will need a retry run`)
-      } else {
-        log(`  ${c.name} settled successfully despite the error`)
-      }
+  }
+
+  log(`settling ${unsettled.map((c) => c.name).join(', ')} (one transaction)…`)
+  const loot = [...possible_loot_item_types(state_json)].map((item_type) => ({ item_type, existing: null }))
+  const settlements = unsettled.map((c) => ({ fighter_idx: BigInt(indices.get(c.id)!), loot }))
+  const cap = await kiosk_cap()
+  if (!cap) throw new Error('No personal kiosk found for this account')
+
+  let all_settled = true
+  try {
+    await submit_with_retry(
+      () =>
+        fight.settle({
+          fight: fight_id,
+          settlements,
+          custody: { kiosk: cap.kioskId, kiosk_cap: cap.objectId },
+        }),
+      log
+    )
+  } catch (error) {
+    log(`settle threw, re-checking on-chain state: ${message_of(error)}`)
+    const recheck = await read_fight(sdk, fight_id).catch((reread_error: unknown) => {
+      log(`settle: re-read after failure also failed (${message_of(reread_error)}) — assuming NOT settled`)
+      return null
+    })
+    const recheck_indices = recheck ? fighter_indices(recheck) : null
+    const still_unsettled = unsettled.filter((c) => {
+      const idx = recheck_indices?.get(c.id)
+      return idx === undefined || !recheck!.fighters[idx]!.settled
+    })
+    if (still_unsettled.length > 0) {
+      all_settled = false
+      log(`  ${still_unsettled.map((c) => c.name).join(', ')} NOT settled — will need a retry run`)
+    } else {
+      log('  settled successfully despite the error')
     }
-    await sleep(1_500)
   }
 
   if (!all_settled)
