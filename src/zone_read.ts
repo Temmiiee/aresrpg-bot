@@ -6,6 +6,7 @@
 import { bcs } from '@mysten/sui/bcs'
 import { Transaction } from '@mysten/sui/transactions'
 import type { SDK } from '@aresrpg/sdk'
+import { zone_id } from '@aresrpg/sdk/seed-ids'
 
 type GameSdk = ReturnType<typeof SDK>
 
@@ -69,6 +70,19 @@ const game_package = (sdk: GameSdk): string => {
   return pkg
 }
 
+// zone::mob_groups / zone::resource_pack_at take the derived Zone object itself, not the World
+// plus raw (zx, zz) -- the zone's own coordinates live on that object already. Passing the World
+// object and the coordinates as extra pure args (as this file used to) is an ArityMismatch: the
+// Move signatures take 2 and 3 args respectively, not 4 and 5 (confirmed live 2026-09-05, right
+// after a successful search_zone -- the silent gap between that and the next log line was this
+// transaction failing to even resolve). search_zone (character_actions.ts) already derives this
+// same zone_id correctly; this file just wasn't doing the same derivation.
+const zone_object_id = (sdk: GameSdk, world_id: string, zx: number, zz: number): string => {
+  const game_original = sdk.game_type_package
+  if (!game_original) throw new Error('zone_read: pins.json has no original game package')
+  return zone_id(world_id, game_original, zx, zz)
+}
+
 /** Every roaming mob group currently live in a searched zone (zone::search must already have
  *  run for (zx, zz), or this aborts ENotSearched). */
 export const read_mob_groups = async (
@@ -78,11 +92,10 @@ export const read_mob_groups = async (
   zx: number,
   zz: number
 ): Promise<MobGroupView[]> => {
+  const zone_object = zone_object_id(sdk, world_id, zx, zz)
   const bytes = await simulate_view_call(sdk, `${game_package(sdk)}::zone::mob_groups`, (tx) => [
-    tx.object(world_id),
+    tx.object(zone_object),
     tx.object(world_content_id),
-    tx.pure.u32(zx),
-    tx.pure.u32(zz),
   ])
   return bcs.vector(MobGroup).parse(bytes)
 }
@@ -97,11 +110,10 @@ export const read_resource_pack = async (
   zz: number,
   index: number
 ): Promise<ResourcePackView> => {
+  const zone_object = zone_object_id(sdk, world_id, zx, zz)
   const bytes = await simulate_view_call(sdk, `${game_package(sdk)}::zone::resource_pack_at`, (tx) => [
-    tx.object(world_id),
+    tx.object(zone_object),
     tx.object(world_content_id),
-    tx.pure.u32(zx),
-    tx.pure.u32(zz),
     tx.pure.u64(index),
   ])
   return ResourcePack.parse(bytes)
